@@ -394,7 +394,7 @@ class GameDialog(QDialog):
                 QApplication.processEvents()
                 try:
                     subprocess.run(
-                        ["python3", "assets/restool.py", "--extract-from-rom"],
+                        [sys.executable, "assets/restool.py", "--extract-from-rom"],
                         cwd=str(game_path), check=True,
                     )
                     self.progress_bar.setValue(100)

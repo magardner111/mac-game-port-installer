@@ -8,3 +8,8 @@ games/
 
 # User settings
 settings.json
+
+# Build artifacts
+build/
+dist/
+*.spec.bak
