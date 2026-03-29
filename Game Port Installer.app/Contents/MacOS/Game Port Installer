@@ -1,0 +1,5 @@
+#!/bin/bash
+# Navigate from MacOS/ up three levels to the project root
+DIR="$(cd "$(dirname "$0")/../../../" && pwd)"
+cd "$DIR"
+exec python3 main.py
