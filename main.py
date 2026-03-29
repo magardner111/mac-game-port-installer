@@ -760,7 +760,7 @@ class MainWindow(QMainWindow):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setStyle("macos")
-    icon_path = Path(__file__).parent / "AppIcon.icns"
+    icon_path = Path(__file__).parent / "assets" / "AppIcon.icns"
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
     win = MainWindow()
