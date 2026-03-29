@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+
+# Installed games and ROM files
+games/
+
+# User settings
+settings.json
