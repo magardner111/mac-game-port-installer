@@ -250,6 +250,11 @@ def _build_game(game: dict, dest: Path, progress_cb=None) -> None:
     # 1. brew deps
     brew_pkgs = build.get("brew", [])
     if brew_pkgs:
+        if not shutil.which("brew"):
+            raise RuntimeError(
+                "Homebrew is required to install dependencies for this game.\n\n"
+                "Install Homebrew from https://brew.sh and try again."
+            )
         _cb(82)
         subprocess.run(["brew", "install"] + brew_pkgs, check=False)
 

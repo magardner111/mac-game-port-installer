@@ -13,6 +13,8 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, QObject, QThread, Signal, QEvent
 from PySide6.QtGui import QColor, QAction, QFont, QIcon
+from PySide6.QtCore import QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget,
     QVBoxLayout, QHBoxLayout,
@@ -757,6 +759,28 @@ class MainWindow(QMainWindow):
 
 # ── Entry point ────────────────────────────────────────────────────────────────
 
+def _check_brew():
+    """Warn once if Homebrew is not installed."""
+    if shutil.which("brew"):
+        return
+    if app_settings.get("brew_warning_shown"):
+        return
+    app_settings.set_value("brew_warning_shown", True)
+    dlg = QMessageBox()
+    dlg.setWindowTitle("Homebrew Required")
+    dlg.setIcon(QMessageBox.Warning)
+    dlg.setText(
+        "Homebrew is not installed.\n\n"
+        "Some games require Homebrew to install dependencies or compile from source. "
+        "Without it, those games may fail to install.\n\n"
+        "Visit brew.sh to install Homebrew."
+    )
+    dlg.addButton("Get Homebrew", QMessageBox.AcceptRole)
+    dlg.addButton("Dismiss", QMessageBox.RejectRole)
+    if dlg.exec() == 0:
+        QDesktopServices.openUrl(QUrl("https://brew.sh"))
+
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setStyle("macos")
@@ -765,4 +789,5 @@ if __name__ == "__main__":
         app.setWindowIcon(QIcon(str(icon_path)))
     win = MainWindow()
     win.show()
+    _check_brew()
     sys.exit(app.exec())
