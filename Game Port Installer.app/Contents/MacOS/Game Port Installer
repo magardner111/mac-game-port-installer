@@ -1,4 +1,7 @@
 #!/bin/bash
+# Add Homebrew and common Python locations to PATH
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+
 # Navigate from MacOS/ up three levels to the project root
 DIR="$(cd "$(dirname "$0")/../../../" && pwd)"
 cd "$DIR"
