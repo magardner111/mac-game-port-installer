@@ -147,6 +147,7 @@ GAMES = [
         "scraper": "github_source",
         "source_ref": "v0.3",
         "folder": "Zelda3",
+        "has_config": True,
         "type": "Reimpl",
         "platforms": ["macOS", "Linux"],
         "icon_url": None,

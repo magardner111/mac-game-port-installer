@@ -9,24 +9,7 @@ The "version" is the latest release tag, or the default branch name if no
 releases exist.
 """
 
-import json
-import os
-import urllib.request
-
-from .base import BaseScraper
-
-_TOKEN = os.environ.get("GITHUB_TOKEN")
-
-
-def _gh_request(url: str):
-    req = urllib.request.Request(
-        url,
-        headers={"User-Agent": "game-port-installer/1.0"},
-    )
-    if _TOKEN:
-        req.add_header("Authorization", f"Bearer {_TOKEN}")
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        return json.loads(resp.read())
+from .base import BaseScraper, _gh_request
 
 
 class GitHubSourceScraper(BaseScraper):

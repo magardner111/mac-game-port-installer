@@ -4,6 +4,9 @@ macOS game port launcher — PySide6.
 Double-click a game to install, update, or launch.
 """
 
+import hashlib
+import shutil
+import subprocess
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -74,7 +77,10 @@ class AllReleasesWorker(QObject):
 
     def run(self):
         for game in GAMES:
-            release = installer.fetch_latest_release(game)
+            try:
+                release = installer.fetch_latest_release(game)
+            except Exception:
+                release = None
             self.game_checked.emit(game["folder"], release)
         self.finished.emit()
 
@@ -170,7 +176,7 @@ class GameDialog(QDialog):
         self.run_btn.clicked.connect(self._do_run)
 
         self.config_btn = QPushButton("Configure")
-        self.config_btn.setVisible(self.game.get("folder") == "Zelda3")
+        self.config_btn.setVisible(bool(self.game.get("has_config")))
         self.config_btn.clicked.connect(self._do_configure)
 
         self.install_btn = QPushButton("Install")
@@ -229,7 +235,7 @@ class GameDialog(QDialog):
         iv = installer.installed_version(self.game, "macOS")
 
         if release is None:
-            self.status_label.setText("No release found" if iv is None else STATUS_NOT_INSTALLED)
+            self.status_label.setText(STATUS_NOT_INSTALLED if iv is None else f"✓  {iv} (offline)")
             return
 
         self.release = release
@@ -331,8 +337,6 @@ class GameDialog(QDialog):
         QMessageBox.critical(self, "Install failed", msg)
 
     def _do_run(self):
-        import hashlib, shutil, subprocess as sp
-
         game_path = installer.game_dir(self.game, "macOS")
         rom_name  = self.game.get("requires_rom")
 
@@ -389,14 +393,14 @@ class GameDialog(QDialog):
                 self.progress_bar.setValue(50)
                 QApplication.processEvents()
                 try:
-                    sp.run(
+                    subprocess.run(
                         ["python3", "assets/restool.py", "--extract-from-rom"],
                         cwd=str(game_path), check=True,
                     )
                     self.progress_bar.setValue(100)
                     self.progress_label.setText("Assets extracted.")
                     QApplication.processEvents()
-                except sp.CalledProcessError as e:
+                except subprocess.CalledProcessError as e:
                     self.progress_bar.setValue(0)
                     self.progress_label.setText("")
                     QMessageBox.critical(self, "Asset extraction failed", str(e))
@@ -438,9 +442,9 @@ class GameDialog(QDialog):
         installer.reveal_in_finder(installer.game_dir(self.game, "macOS"))
 
     def _do_configure(self):
-        import subprocess
-        config_script = Path(__file__).parent / "zelda3_config.py"
-        subprocess.Popen(["python3", str(config_script)])
+        from zelda3_config import ConfigWindow
+        self._config_win = ConfigWindow()
+        self._config_win.show()
 
 
 # ── Main window ────────────────────────────────────────────────────────────────
@@ -493,7 +497,7 @@ class MainWindow(QMainWindow):
         self.auto_update_check = QCheckBox("Auto-update on launch")
         self.auto_update_check.setChecked(app_settings.get("auto_update"))
         self.auto_update_check.toggled.connect(lambda v: (
-            app_settings.set("auto_update", v),
+            app_settings.set_value("auto_update", v),
             self._auto_update_action.setChecked(v),
         ))
         toolbar.addWidget(self.auto_update_check)
@@ -536,7 +540,7 @@ class MainWindow(QMainWindow):
         self._auto_update_action.setCheckable(True)
         self._auto_update_action.setChecked(app_settings.get("auto_update"))
         self._auto_update_action.toggled.connect(lambda v: (
-            app_settings.set("auto_update", v),
+            app_settings.set_value("auto_update", v),
             self.auto_update_check.setChecked(v),
         ))
 
@@ -547,17 +551,20 @@ class MainWindow(QMainWindow):
     def _start_release_scan(self):
         if self._scan_thread and self._scan_thread.isRunning():
             return
+        self._scan_thread = None
+        self._scan_worker = None
         self.statusBar().showMessage("Checking for latest versions…")
-        self._scan_thread = QThread(self)
-        self._scan_worker = AllReleasesWorker()
-        self._scan_worker.moveToThread(self._scan_thread)
-        self._scan_thread.started.connect(self._scan_worker.run)
-        self._scan_worker.game_checked.connect(self._on_release_fetched)
-        self._scan_worker.finished.connect(self._scan_thread.quit)
-        self._scan_worker.finished.connect(
-            lambda: self.statusBar().showMessage("Double-click a port to install or launch")
-        )
-        self._scan_thread.start()
+        thread = QThread(self)
+        worker = AllReleasesWorker()
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.game_checked.connect(self._on_release_fetched)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(lambda: self.statusBar().showMessage("Double-click a port to install or launch"))
+        worker.finished.connect(lambda: setattr(self, '_scan_thread', None))
+        self._scan_thread = thread
+        self._scan_worker = worker
+        thread.start()
 
     def _on_release_fetched(self, folder: str, release):
         if not release:

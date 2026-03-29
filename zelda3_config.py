@@ -3,19 +3,20 @@
 
 import re
 import sys
-from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QFont, QKeySequence
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
-    QFileDialog, QFormLayout, QFrame, QGroupBox, QHBoxLayout, QHeaderView,
+    QApplication, QCheckBox, QComboBox,
+    QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QHeaderView,
     QLabel, QLineEdit, QMainWindow, QPushButton, QScrollArea,
-    QSizePolicy, QSpinBox, QTabWidget, QTableWidget, QTableWidgetItem,
+    QSizePolicy, QTabWidget, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QWidget,
 )
 
-INI_PATH = Path(__file__).parent / "games/Zelda3/macOS/zelda3.ini"
+import installer
+
+INI_PATH = installer.game_dir({"folder": "Zelda3"}, "macOS") / "zelda3.ini"
 
 SNES_BUTTONS = ["Up", "Down", "Left", "Right", "Select", "Start", "A", "B", "X", "Y", "L", "R"]
 
@@ -369,10 +370,6 @@ class KeyboardTab(QScrollArea):
         for i, btn_name in enumerate(SNES_BUTTONS):
             cap = KeyCaptureButton(controls[i] if i < len(controls) else "")
             self._button_captures.append(cap)
-            row = QHBoxLayout()
-            row.addWidget(cap)
-            w = QWidget()
-            w.setLayout(row)
             form1.addRow(f"{btn_name}:", cap)
 
         vbox.addWidget(group1)
@@ -465,10 +462,7 @@ class GamepadTab(QScrollArea):
             combo.setEditable(True)
             combo.addItems(GAMEPAD_BUTTONS)
             val = controls[i] if i < len(controls) else ""
-            if val in GAMEPAD_BUTTONS:
-                combo.setCurrentText(val)
-            else:
-                combo.setCurrentText(val)
+            combo.setCurrentText(val)
             self._combos.append(combo)
             form.addRow(f"{btn_name}:", combo)
 
@@ -493,8 +487,8 @@ class ConfigWindow(QMainWindow):
 
         if not INI_PATH.exists():
             from PySide6.QtWidgets import QMessageBox
-            QMessageBox.critical(None, "Error", f"Config file not found:\n{INI_PATH}")
-            sys.exit(1)
+            QMessageBox.critical(None, "Not installed", "Zelda: A Link to the Past is not installed yet.")
+            return
 
         self._ini = IniFile(INI_PATH)
 
@@ -539,18 +533,6 @@ class ConfigWindow(QMainWindow):
         self._gp_tab.apply()
         self._ini.save()
         self.statusBar().showMessage("Saved.", 3000)
-
-    def _get_meta(self):
-        # Helper so SettingsTab can reach its own meta
-        pass
-
-
-# ── Patch SettingsTab._get_meta to work correctly ────────────────────────────
-
-def _patched_get_meta(self):
-    return SETTINGS_META.get(self._section, [])
-
-SettingsTab._get_meta = _patched_get_meta
 
 
 if __name__ == "__main__":

@@ -6,14 +6,9 @@ BaseScraper format.  Respects the GITHUB_TOKEN environment variable for
 higher rate limits.
 """
 
-import json
-import os
 import platform
-import urllib.request
 
-from .base import BaseScraper
-
-_TOKEN = os.environ.get("GITHUB_TOKEN")
+from .base import BaseScraper, _gh_request
 
 _SKIP_TOKENS = (
     "flatpak", "source", ".deb", ".rpm",
@@ -22,17 +17,6 @@ _SKIP_TOKENS = (
 )
 
 _ARCHIVE_EXTS = (".zip", ".tar.gz", ".tar.xz", ".tgz", ".dmg")
-
-
-def _gh_request(url: str):
-    req = urllib.request.Request(
-        url,
-        headers={"User-Agent": "game-port-installer/1.0"},
-    )
-    if _TOKEN:
-        req.add_header("Authorization", f"Bearer {_TOKEN}")
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        return json.loads(resp.read())
 
 
 def _classify_os(name: str) -> str:

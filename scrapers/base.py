@@ -5,7 +5,20 @@ To add a new source (itch.io, direct URL, etc.), subclass BaseScraper,
 implement all abstract methods, then register it in scrapers/__init__.py.
 """
 
+import json
+import os
+import urllib.request
 from abc import ABC, abstractmethod
+
+_TOKEN = os.environ.get("GITHUB_TOKEN")
+
+
+def _gh_request(url: str):
+    req = urllib.request.Request(url, headers={"User-Agent": "game-port-installer/1.0"})
+    if _TOKEN:
+        req.add_header("Authorization", f"Bearer {_TOKEN}")
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return json.loads(resp.read())
 
 
 class BaseScraper(ABC):

@@ -11,6 +11,7 @@ import os
 import platform
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import urllib.request
@@ -21,7 +22,14 @@ from scrapers import get_scraper
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 
-GAMES_DIR = Path.home() / "Projects" / "game-port-installer" / "games"
+def _default_games_dir() -> Path:
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "GamePortInstaller" / "games"
+    if sys.platform == "win32":
+        return Path(os.environ.get("APPDATA", str(Path.home()))) / "GamePortInstaller" / "games"
+    return Path.home() / ".local" / "share" / "GamePortInstaller" / "games"
+
+GAMES_DIR = _default_games_dir()
 
 OS_NAMES = ["macOS", "Linux", "Windows"]
 
@@ -32,15 +40,11 @@ def fetch_latest_release(game: dict) -> dict | None:
     return get_scraper(game).fetch_latest_release(game)
 
 
-def assets_for_os(release: dict, os_name: str, game: dict = None) -> list[dict]:
-    if game is None:
-        game = {}
+def assets_for_os(release: dict, os_name: str, game: dict = {}) -> list[dict]:
     return get_scraper(game).assets_for_os(release, os_name, game)
 
 
-def pick_asset(release: dict, os_name: str, game: dict = None) -> dict | None:
-    if game is None:
-        game = {}
+def pick_asset(release: dict, os_name: str, game: dict = {}) -> dict | None:
     return get_scraper(game).pick_asset(release, os_name, game)
 
 
@@ -74,7 +78,9 @@ def is_installed(game: dict) -> bool:
 def download_asset(asset: dict, progress_cb=None) -> Path:
     url  = asset.get("download_url") or asset.get("browser_download_url")
     name = asset["name"]
-    tmp  = Path(tempfile.mktemp(suffix="_" + name))
+    fd, tmp_path = tempfile.mkstemp(suffix="_" + name)
+    os.close(fd)
+    tmp = Path(tmp_path)
 
     req = urllib.request.Request(url, headers={"User-Agent": "game-port-installer/1.0"})
 
@@ -203,10 +209,10 @@ def _flatten_if_needed(dest: Path) -> None:
     items = [i for i in dest.iterdir() if i.name != "version.txt"]
     if len(items) == 1 and items[0].is_dir():
         inner = items[0]
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp = Path(tmp) / "s"
-            shutil.move(str(inner), tmp)
-            for item in tmp.iterdir():
+        with tempfile.TemporaryDirectory() as _tmp:
+            staging = Path(_tmp) / "s"
+            shutil.move(str(inner), staging)
+            for item in staging.iterdir():
                 shutil.move(str(item), dest)
 
 
