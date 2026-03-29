@@ -223,13 +223,14 @@ class GameDialog(QDialog):
         self._rel_thread.start()
 
     def _refresh_installed_buttons(self):
-        """Enable Run/Uninstall/Browse based solely on local install state."""
+        """Enable Run/Uninstall/Browse/Configure based solely on local install state."""
         iv        = installer.installed_version(self.game, "macOS")
         installed = installer.game_dir(self.game, "macOS").exists()
         self.installed_label.setText(iv or "—")
         self.run_btn.setEnabled(iv is not None)
         self.uninstall_btn.setEnabled(iv is not None)
         self.folder_btn.setEnabled(installed)
+        self.config_btn.setEnabled(iv is not None)
 
     def _apply_release(self, release):
         iv = installer.installed_version(self.game, "macOS")
@@ -277,6 +278,7 @@ class GameDialog(QDialog):
         self.run_btn.setEnabled(iv is not None)
         self.uninstall_btn.setEnabled(iv is not None)
         self.folder_btn.setEnabled(installed)
+        self.config_btn.setEnabled(iv is not None)
 
     def _on_asset_changed(self, name: str):
         self.selected_asset = self._asset_map.get(name)
