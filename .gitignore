@@ -8,3 +8,6 @@ games/
 
 # User settings
 settings.json
+
+# Claude Code
+.claude/
