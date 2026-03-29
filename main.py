@@ -12,7 +12,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QObject, QThread, Signal, QEvent
-from PySide6.QtGui import QColor, QAction, QFont
+from PySide6.QtGui import QColor, QAction, QFont, QIcon
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget,
     QVBoxLayout, QHBoxLayout,
@@ -760,6 +760,9 @@ class MainWindow(QMainWindow):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setStyle("macos")
+    icon_path = Path(__file__).parent / "AppIcon.icns"
+    if icon_path.exists():
+        app.setWindowIcon(QIcon(str(icon_path)))
     win = MainWindow()
     win.show()
     sys.exit(app.exec())
