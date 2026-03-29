@@ -444,7 +444,7 @@ class GameDialog(QDialog):
         installer.reveal_in_finder(installer.game_dir(self.game, "macOS"))
 
     def _do_configure(self):
-        from zelda3_config import ConfigWindow
+        from configs.zelda3 import ConfigWindow
         self._config_win = ConfigWindow()
         self._config_win.show()
 
