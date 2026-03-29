@@ -11,3 +11,15 @@ settings.json
 
 # Claude Code
 .claude/
+
+# Runtime-generated files
+release_cache.json
+build.log
+
+# Python packaging
+*.egg-info/
+dist/
+
+# Virtual environments
+venv/
+.venv/

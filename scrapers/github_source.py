@@ -41,7 +41,14 @@ class GitHubSourceScraper(BaseScraper):
                 data = _gh_request(f"https://api.github.com/repos/{repo}/commits/{ref}")
                 tag = data["sha"][:7]   # short SHA as version
             except Exception:
-                return None
+                pass
+
+        # If all API calls failed but we have a pinned source_ref, use it directly.
+        # The archive URL is deterministic so we don't need the API to install.
+        if not tag:
+            tag = game.get("source_ref")
+        if not tag:
+            return None
 
         ref = game.get("source_ref") or tag
         project = repo.split("/")[-1]

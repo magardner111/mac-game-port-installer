@@ -5,4 +5,4 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 # Navigate from MacOS/ up three levels to the project root
 DIR="$(cd "$(dirname "$0")/../../../" && pwd)"
 cd "$DIR"
-exec python3 main.py
+exec arch -arm64 python3 main.py

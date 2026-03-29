@@ -10,13 +10,24 @@ import os
 import urllib.request
 from abc import ABC, abstractmethod
 
-_TOKEN = os.environ.get("GITHUB_TOKEN")
+
+def _get_token() -> str:
+    """Return a GitHub token from settings or environment (checked at call time)."""
+    try:
+        import settings as _s
+        tok = _s.get("github_token") or ""
+        if tok:
+            return tok
+    except Exception:
+        pass
+    return os.environ.get("GITHUB_TOKEN", "")
 
 
 def _gh_request(url: str):
     req = urllib.request.Request(url, headers={"User-Agent": "game-port-installer/1.0"})
-    if _TOKEN:
-        req.add_header("Authorization", f"Bearer {_TOKEN}")
+    token = _get_token()
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
     with urllib.request.urlopen(req, timeout=15) as resp:
         return json.loads(resp.read())
 

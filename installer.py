@@ -7,6 +7,7 @@ so new sources (itch.io, direct URLs, etc.) can be added without touching
 this file.
 """
 
+import json
 import os
 import platform
 import shutil
@@ -34,10 +35,61 @@ GAMES_DIR = _default_games_dir()
 OS_NAMES = ["macOS", "Linux", "Windows"]
 
 
+def _migrate_old_games_dir() -> None:
+    """Move games from the pre-refactor location into the current GAMES_DIR."""
+    old = Path(__file__).parent / "games"
+    if not old.is_dir():
+        return
+    GAMES_DIR.mkdir(parents=True, exist_ok=True)
+    for item in old.iterdir():
+        dest = GAMES_DIR / item.name
+        if not dest.exists():
+            shutil.move(str(item), dest)
+    try:
+        old.rmdir()   # remove only if now empty
+    except OSError:
+        pass
+
+_migrate_old_games_dir()
+
+
+# ── Release cache ──────────────────────────────────────────────────────────────
+
+def _cache_path() -> Path:
+    return GAMES_DIR.parent / "release_cache.json"
+
+def _load_cache() -> dict:
+    p = _cache_path()
+    if p.exists():
+        try:
+            return json.loads(p.read_text())
+        except Exception:
+            pass
+    return {}
+
+def _save_cache(updates: dict) -> None:
+    """Merge `updates` (folder → release) into the on-disk cache."""
+    try:
+        cache = _load_cache()
+        cache.update(updates)
+        _cache_path().parent.mkdir(parents=True, exist_ok=True)
+        _cache_path().write_text(json.dumps(cache))
+    except Exception:
+        pass
+
+
 # ── Scraper-delegating helpers ─────────────────────────────────────────────────
 
 def fetch_latest_release(game: dict) -> dict | None:
-    return get_scraper(game).fetch_latest_release(game)
+    try:
+        release = get_scraper(game).fetch_latest_release(game)
+        if release:
+            _save_cache({game["folder"]: release})
+            return release
+    except Exception:
+        pass
+    # Fall back to cached data when the network/API is unavailable
+    return _load_cache().get(game["folder"])
 
 
 def assets_for_os(release: dict, os_name: str, game: dict = {}) -> list[dict]:
@@ -247,16 +299,24 @@ def _build_game(game: dict, dest: Path, progress_cb=None) -> None:
     # Locate the directory that actually contains the Makefile
     build_dir = _find_makefile_dir(dest)
 
+    # Build a PATH that includes Homebrew regardless of how the app was launched
+    # (.app bundles don't always inherit the user's shell PATH).
+    homebrew_bin = "/opt/homebrew/bin"
+    base_path    = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
+    build_env    = os.environ.copy()
+    if homebrew_bin not in base_path:
+        build_env["PATH"] = homebrew_bin + ":" + base_path
+
     # 1. brew deps
     brew_pkgs = build.get("brew", [])
     if brew_pkgs:
-        if not shutil.which("brew"):
+        if not shutil.which("brew", path=build_env["PATH"]):
             raise RuntimeError(
                 "Homebrew is required to install dependencies for this game.\n\n"
                 "Install Homebrew from https://brew.sh and try again."
             )
         _cb(82)
-        subprocess.run(["brew", "install"] + brew_pkgs, check=False)
+        subprocess.run(["brew", "install"] + brew_pkgs, check=False, env=build_env)
 
     # 2. pip requirements (relative to build_dir)
     pip_req = build.get("pip_requirements")
@@ -264,12 +324,12 @@ def _build_game(game: dict, dest: Path, progress_cb=None) -> None:
         _cb(86)
         subprocess.run(
             ["pip3", "install", "--break-system-packages", "-r", pip_req],
-            cwd=str(build_dir), check=False,
+            cwd=str(build_dir), check=False, env=build_env,
         )
 
     # 3. make clean (remove any stale compiled artifacts before rebuilding)
     _cb(88)
-    subprocess.run(["make", "clean"], cwd=str(build_dir), check=False)
+    subprocess.run(["make", "clean"], cwd=str(build_dir), check=False, env=build_env)
 
     # 4. make
     _cb(90)
@@ -285,11 +345,17 @@ def _build_game(game: dict, dest: Path, progress_cb=None) -> None:
     # Pass extra CFLAGS via environment so the Makefile can append its own flags
     # (e.g. sdl2-config --cflags). Command-line CFLAGS= would override the whole
     # Makefile CFLAGS variable and drop SDL2 include paths.
-    env = os.environ.copy()
     if make_cflags:
-        env["CFLAGS"] = make_cflags
+        build_env["CFLAGS"] = make_cflags
 
-    subprocess.run(cmd, cwd=str(build_dir), check=True, env=env)
+    result = subprocess.run(cmd, cwd=str(build_dir), env=build_env,
+                            capture_output=True, text=True)
+
+    if result.returncode != 0:
+        output = (result.stdout + result.stderr).strip()
+        raise RuntimeError(
+            f"Build failed (exit {result.returncode}):\n\n{output[-3000:]}"
+        )
 
     # 5. If build_dir is a subdirectory of dest, move the built binary up
     if build_dir != dest:
@@ -408,15 +474,22 @@ def _find_launchable(d: Path):
     return ("bin", best)
 
 
-def launch_game(game: dict, os_name: str) -> None:
+def launch_game(game: dict, os_name: str) -> subprocess.Popen:
+    """Launch the game and return the Popen object for process tracking.
+
+    For .app bundles we use plain `open` (not -W) because macOS apps often
+    remain running in the dock after their window closes, which would cause
+    `open -W` to block indefinitely and make the Run button stay disabled.
+    For bare binaries we spawn directly so we can track the process properly.
+    """
     d = game_dir(game, os_name)
     kind, target = _find_launchable(d)
     if kind is None:
         raise FileNotFoundError(f"No launchable found in {d}")
     if kind == "app":
-        subprocess.Popen(["open", str(target)])
+        return subprocess.Popen(["open", str(target)])
     else:
-        subprocess.Popen([str(target)], cwd=str(d))
+        return subprocess.Popen([str(target)], cwd=str(d))
 
 
 # ── Finder ────────────────────────────────────────────────────────────────────

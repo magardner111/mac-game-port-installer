@@ -7,6 +7,7 @@ higher rate limits.
 """
 
 import platform
+import re
 
 from .base import BaseScraper, _gh_request
 
@@ -97,14 +98,19 @@ class GitHubScraper(BaseScraper):
         if not candidates:
             return None
 
-        # Architecture-aware selection for multiple macOS assets
-        if os_name == "macOS" and len(candidates) > 1:
+        # Architecture-aware selection for macOS assets
+        if os_name == "macOS":
             machine     = platform.machine().lower()
-            arch_tokens = ["arm64", "aarch64", "arm"] if machine == "arm64" else ["intel", "x86_64", "x64"]
+            arch_tokens = ["arm64", "aarch64", "arm", "apple", "silicon", "m-series"] if machine == "arm64" else ["intel", "x86_64", "x64"]
             for token in arch_tokens:
                 for a in candidates:
                     n = a["name"].lower()
                     if token in n and n.endswith(_ARCHIVE_EXTS):
+                        return a
+            if machine == "arm64":
+                for a in candidates:
+                    n = a["name"].lower()
+                    if re.search(r"m\d+", n) and n.endswith(_ARCHIVE_EXTS):
                         return a
 
         # Prefer archives over bare executables

@@ -11,10 +11,8 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QObject, QThread, Signal, QEvent
-from PySide6.QtGui import QColor, QAction, QFont, QIcon
-from PySide6.QtCore import QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import Qt, QObject, QThread, QTimer, Signal, QEvent, QUrl
+from PySide6.QtGui import QColor, QAction, QFont, QIcon, QPainter, QPixmap, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget,
     QVBoxLayout, QHBoxLayout,
@@ -32,7 +30,7 @@ from games import GAMES
 
 STATUS_NOT_INSTALLED = "—  Not Installed"
 
-COLOR_INSTALLED = QColor("#1a7a1a")
+COLOR_INSTALLED = QColor("#00e676")
 COLOR_UPDATE    = QColor("#b87000")
 COLOR_NONE      = QColor("#888888")
 
@@ -78,12 +76,20 @@ class AllReleasesWorker(QObject):
     finished     = Signal()
 
     def run(self):
+        disk_cache = installer._load_cache()
+        cache_updates = {}
         for game in GAMES:
             try:
-                release = installer.fetch_latest_release(game)
+                release = installer.get_scraper(game).fetch_latest_release(game)
             except Exception:
                 release = None
+            if release:
+                cache_updates[game["folder"]] = release
+            else:
+                release = disk_cache.get(game["folder"])
             self.game_checked.emit(game["folder"], release)
+        if cache_updates:
+            installer._save_cache(cache_updates)
         self.finished.emit()
 
 
@@ -91,6 +97,7 @@ class AllReleasesWorker(QObject):
 
 class GameDialog(QDialog):
     status_changed = Signal(dict)
+    _running: "dict[str, subprocess.Popen]" = {}   # folder → Popen
 
     def __init__(self, parent, game: dict):
         super().__init__(parent)
@@ -106,6 +113,11 @@ class GameDialog(QDialog):
         self.setModal(True)
         self._build_ui()
         self._load_release()
+
+        self._poll_timer = QTimer(self)
+        self._poll_timer.setInterval(500)
+        self._poll_timer.timeout.connect(self._poll_running)
+        self._poll_timer.start()
 
     def _build_ui(self):
         root = QVBoxLayout(self)
@@ -229,10 +241,30 @@ class GameDialog(QDialog):
         iv        = installer.installed_version(self.game, "macOS")
         installed = installer.game_dir(self.game, "macOS").exists()
         self.installed_label.setText(iv or "—")
-        self.run_btn.setEnabled(iv is not None)
+        running   = self._is_running()
+        self.run_btn.setEnabled(iv is not None and not running)
         self.uninstall_btn.setEnabled(iv is not None)
         self.folder_btn.setEnabled(installed)
         self.config_btn.setEnabled(iv is not None)
+
+    def _is_running(self) -> bool:
+        """Return True if this game's process is currently alive."""
+        folder = self.game["folder"]
+        proc = GameDialog._running.get(folder)
+        if proc is None:
+            return False
+        if proc.poll() is not None:
+            del GameDialog._running[folder]
+            return False
+        return True
+
+    def _poll_running(self):
+        """Called every 500 ms — re-enable Run once the game process exits."""
+        if self.run_btn.isEnabled():
+            return
+        if not self._is_running():
+            iv = installer.installed_version(self.game, "macOS")
+            self.run_btn.setEnabled(iv is not None)
 
     def _apply_release(self, release):
         iv = installer.installed_version(self.game, "macOS")
@@ -277,7 +309,7 @@ class GameDialog(QDialog):
 
         installed = installer.game_dir(self.game, "macOS").exists()
         self.install_btn.setEnabled(True)
-        self.run_btn.setEnabled(iv is not None)
+        self.run_btn.setEnabled(iv is not None and not self._is_running())
         self.uninstall_btn.setEnabled(iv is not None)
         self.folder_btn.setEnabled(installed)
         self.config_btn.setEnabled(iv is not None)
@@ -363,7 +395,12 @@ class GameDialog(QDialog):
             )
 
             if not rom_ok:
-                # Try the file picker
+                QMessageBox.information(
+                    self,
+                    "ROM Required",
+                    f"{self.game['name']} requires an original ROM to extract game assets.\n\n"
+                    f"Please locate your copy of {rom_name} in the next dialog.",
+                )
                 path, _ = QFileDialog.getOpenFileName(
                     self,
                     f"{self.game['name']} — Locate ROM ({rom_name})",
@@ -414,7 +451,9 @@ class GameDialog(QDialog):
         self.progress_bar.setValue(0)
         self.progress_label.setText("")
         try:
-            installer.launch_game(self.game, "macOS")
+            proc = installer.launch_game(self.game, "macOS")
+            GameDialog._running[self.game["folder"]] = proc
+            self.run_btn.setEnabled(False)
             self.accept()
         except Exception as e:
             QMessageBox.critical(self, "Launch failed", str(e))
@@ -446,9 +485,54 @@ class GameDialog(QDialog):
         installer.reveal_in_finder(installer.game_dir(self.game, "macOS"))
 
     def _do_configure(self):
-        from configs.zelda3 import ConfigWindow
-        self._config_win = ConfigWindow()
+        import importlib
+        folder = self.game["folder"].lower()
+        mod = importlib.import_module(f"configs.{folder}")
+        self._config_win = mod.ConfigWindow()
         self._config_win.show()
+
+
+# ── Background image filter ────────────────────────────────────────────────────
+
+class _BgFilter(QObject):
+    """Paints a pixmap cover-scaled and centred on a viewport."""
+    def __init__(self, path: Path, tree):
+        super().__init__()
+        self._px   = QPixmap(str(path))
+        self._tree = tree
+
+    def _items_bottom(self) -> int:
+        """Return the y-coordinate of the bottom edge of the last visible item."""
+        root   = self._tree.invisibleRootItem()
+        bottom = 0
+
+        def walk(item):
+            nonlocal bottom
+            r = self._tree.visualItemRect(item)
+            if r.isValid():
+                bottom = max(bottom, r.bottom())
+            if item.isExpanded():
+                for i in range(item.childCount()):
+                    walk(item.child(i))
+
+        for i in range(root.childCount()):
+            walk(root.child(i))
+        return bottom
+
+    def eventFilter(self, vp, event):
+        if event.type() == QEvent.Type.Paint and not self._px.isNull():
+            p = QPainter(vp)
+            scaled = self._px.scaled(vp.width(), vp.height(),
+                                     Qt.KeepAspectRatioByExpanding,
+                                     Qt.SmoothTransformation)
+            x = (vp.width()  - scaled.width())  // 2
+            y = (vp.height() - scaled.height()) // 2
+            p.drawPixmap(x, y, scaled)
+            bottom = self._items_bottom()
+            if bottom > 0:
+                p.fillRect(0, 0, vp.width(), bottom + 10, QColor(30, 30, 30, 180))
+            p.end()
+        return False  # let Qt paint items on top
 
 
 # ── Main window ────────────────────────────────────────────────────────────────
@@ -492,7 +576,7 @@ class MainWindow(QMainWindow):
         toolbar.addSpacing(12)
         toolbar.addWidget(QLabel("Type:"))
         self.type_combo = QComboBox()
-        self.type_combo.addItems(["All", "Recomp", "Decomp", "Reimpl", "Port", "Fan Game"])
+        self.type_combo.addItems(["All", "Recomp", "Decomp", "Reimpl", "Port"])
         self.type_combo.setFixedWidth(100)
         self.type_combo.currentTextChanged.connect(self._apply_filter)
         toolbar.addWidget(self.type_combo)
@@ -529,6 +613,11 @@ class MainWindow(QMainWindow):
         hh.setSectionResizeMode(1, QHeaderView.Fixed); self.tree.setColumnWidth(1, 80)
         hh.setSectionResizeMode(2, QHeaderView.Fixed); self.tree.setColumnWidth(2, 130)
 
+        _bg = Path(__file__).parent / "assets" / "mgp-bg.png"
+        if _bg.exists():
+            self._bg_filter = _BgFilter(_bg, self.tree)
+            self.tree.viewport().installEventFilter(self._bg_filter)
+
         self.tree.itemDoubleClicked.connect(self._on_double_click)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._on_context_menu)
@@ -549,6 +638,46 @@ class MainWindow(QMainWindow):
         ))
 
         smenu.addAction(self._auto_update_action)
+
+        smenu.addSeparator()
+
+        token_action = QAction("Add GitHub Token…", self)
+        token_action.triggered.connect(self._show_token_dialog)
+        smenu.addAction(token_action)
+
+    def _show_token_dialog(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("GitHub Token")
+        dlg.setMinimumWidth(400)
+        dlg.setModal(True)
+
+        layout = QVBoxLayout(dlg)
+        layout.setSpacing(10)
+        layout.setContentsMargins(20, 16, 20, 16)
+
+        layout.addWidget(QLabel("Enter a GitHub personal access token to avoid API rate limits."))
+
+        token_edit = QLineEdit()
+        token_edit.setPlaceholderText("ghp_…")
+        token_edit.setEchoMode(QLineEdit.Password)
+        token_edit.setText(app_settings.get("github_token") or "")
+        layout.addWidget(token_edit)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        save_btn = QPushButton("Save")
+        cancel_btn = QPushButton("Cancel")
+        save_btn.setDefault(True)
+        save_btn.clicked.connect(lambda: (
+            app_settings.set_value("github_token", token_edit.text().strip()),
+            dlg.accept(),
+        ))
+        cancel_btn.clicked.connect(dlg.reject)
+        btn_row.addWidget(cancel_btn)
+        btn_row.addWidget(save_btn)
+        layout.addLayout(btn_row)
+
+        dlg.exec()
 
     # ── Release scanning ───────────────────────────────────────────────────────
 
@@ -784,7 +913,7 @@ def _check_brew():
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setStyle("macos")
-    icon_path = Path(__file__).parent / "assets" / "AppIcon.icns"
+    icon_path = Path(__file__).parent / "assets" / "mgp-icon.png"
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
     win = MainWindow()

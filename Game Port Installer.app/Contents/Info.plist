@@ -17,7 +17,7 @@
     <key>CFBundleExecutable</key>
     <string>Game Port Installer</string>
     <key>CFBundleIconFile</key>
-    <string>AppIcon</string>
+    <string>mgp-icon</string>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSRequiresAquaSystemAppearance</key>
