@@ -1061,6 +1061,8 @@ class BloodRippleOverlay(QWidget):
         self._last_wrist: tuple | None = None
         self._idle_frames: int = 0
         self._smear_blobs: list = []   # active smear particles with physics
+        self._smear_active: bool = False
+        self._smear_sound_played: bool = False
 
         # Drip sounds — pre-loaded for zero-latency playback
         self._drip_files: list = []
@@ -1188,14 +1190,21 @@ class BloodRippleOverlay(QWidget):
                     by = ly + (wy - ly) * t
                     if 0 <= bx <= self.width() and 0 <= by <= self.height():
                         self._smear_blobs.append(self._make_smear_blob(bx, by, speed))
+                if not self._smear_active:
+                    self._smear_active = True
+                    self._smear_sound_played = False
                 self._idle_frames = 0
                 if self._spawn_timer.isActive():
                     self._spawn_timer.stop()
             else:
                 self._idle_frames += 1
-                if self._idle_frames >= 6 and not self._spawn_timer.isActive():
-                    self._spawn_timer.setInterval(random.randint(400, 2400))
-                    self._spawn_timer.start()
+                if self._idle_frames >= 6:
+                    if self._smear_active:
+                        self._smear_active = False
+                        self._smear_sound_played = False
+                    if not self._spawn_timer.isActive():
+                        self._spawn_timer.setInterval(random.randint(400, 2400))
+                        self._spawn_timer.start()
         self._last_wrist = (wx, wy)
 
         # Tick smear blob physics — drift down, fade out
@@ -1209,7 +1218,12 @@ class BloodRippleOverlay(QWidget):
         self._smear_blobs = alive
 
     def _play_drip_sound(self):
-        """Play a random drip WAV, never repeating either of the last two played."""
+        """Play a random drip WAV, never repeating either of the last two played.
+        While smear is active only one sound is allowed; silenced after that until idle."""
+        if self._smear_active:
+            if self._smear_sound_played:
+                return
+            self._smear_sound_played = True
         if not self._drip_files:
             return
         pool = [f for f in self._drip_files if f not in self._recent_drips]
@@ -1355,6 +1369,8 @@ class BloodRippleOverlay(QWidget):
         self._drops.clear()
         self._rings.clear()
         self._smear_blobs.clear()
+        self._smear_active = False
+        self._smear_sound_played = False
         for fx in self._drip_effects.values():
             fx.stop()
         if self._splash_fx:
