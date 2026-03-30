@@ -25,6 +25,7 @@ _DEFAULTS: dict = {
     "auto_update": False,
     "snow_effect": False,
     "fire_effect": False,
+    "waterfall_effect": False,
     "nesticle_cursor": False,
     "blood_trail": False,
 }

@@ -813,6 +813,7 @@ class MainWindow(QMainWindow):
         self._auto_update_threads: list[QThread] = []
         self._snow:         object = None
         self._fire:         object = None
+        self._waterfall:    object = None
         self._blood:        object = None
         self._cursor_anim:  object = None
 
@@ -827,6 +828,8 @@ class MainWindow(QMainWindow):
             self._toggle_snow(True)
         if zsnes_theme and app_settings.get("fire_effect"):
             self._toggle_fire(True)
+        if zsnes_theme and app_settings.get("waterfall_effect"):
+            self._toggle_waterfall(True)
         if zsnes_theme and app_settings.get("nesticle_cursor"):
             self._toggle_nesticle(True)
             if app_settings.get("blood_trail"):
@@ -936,6 +939,12 @@ class MainWindow(QMainWindow):
             self._fire_action.toggled.connect(self._toggle_fire)
             smenu.addAction(self._fire_action)
 
+            self._waterfall_action = QAction("Waterfall Effect", self)
+            self._waterfall_action.setCheckable(True)
+            self._waterfall_action.setChecked(app_settings.get("waterfall_effect"))
+            self._waterfall_action.toggled.connect(self._toggle_waterfall)
+            smenu.addAction(self._waterfall_action)
+
             self._nesticle_action = QAction("Nesticle Cursor", self)
             self._nesticle_action.setCheckable(True)
             self._nesticle_action.setChecked(app_settings.get("nesticle_cursor"))
@@ -981,6 +990,19 @@ class MainWindow(QMainWindow):
             if self._fire is not None:
                 self._fire.stop()
 
+    def _toggle_waterfall(self, enabled: bool):
+        app_settings.set_value("waterfall_effect", enabled)
+        if not zsnes_theme:
+            return
+        if enabled:
+            if self._waterfall is None:
+                self._waterfall = zsnes_theme.WaterfallOverlay(self.centralWidget())
+            self._waterfall.resize(self.centralWidget().size())
+            self._waterfall.start()
+        else:
+            if self._waterfall is not None:
+                self._waterfall.stop()
+
     def _toggle_nesticle(self, enabled: bool):
         app_settings.set_value("nesticle_cursor", enabled)
         if not zsnes_theme:
@@ -1023,9 +1045,11 @@ class MainWindow(QMainWindow):
         cw = self.centralWidget()
         if self._snow  is not None and self._snow.is_running():
             self._snow.resize(cw.size())
-        if self._fire  is not None and self._fire.is_running():
+        if self._fire       is not None and self._fire.is_running():
             self._fire.resize(cw.size())
-        if self._blood is not None and self._blood.is_running():
+        if self._waterfall  is not None and self._waterfall.is_running():
+            self._waterfall.resize(cw.size())
+        if self._blood      is not None and self._blood.is_running():
             self._blood.resize(cw.size())
 
     def _show_token_dialog(self):

@@ -1015,6 +1015,145 @@ class FireOverlay(QWidget):
         return self._timer.isActive()
 
 
+# ── Waterfall overlay ───────────────────────────────────────────────────────────
+
+class WaterfallOverlay(QWidget):
+    """
+    Sonic 1 Green Hill Zone-style waterfall: narrow cyan/blue streams scroll
+    downward at slightly different speeds, with white sparkle highlights.
+    Alpha is capped low so underlying text stays readable.
+
+    Requires numpy (already a project dependency).
+    """
+
+    _FPS     = 30
+    _COL_W   = 5      # screen pixels per column stream
+    _SPEED   = 2.5    # pixels per frame (base scroll rate)
+
+    # Repeating per-column colour pattern (one vertical cycle, top→down).
+    # Entries: (r, g, b, a).  Zero-alpha entries are invisible gaps.
+    _PAT: list[tuple[int, int, int, int]] = [
+        (  0,  20,  70,  0),   # gap ×4
+        (  0,  20,  70,  0),
+        (  0,  20,  70,  0),
+        (  0,  20,  70,  0),
+        (  0,  35, 100, 12),   # fade in
+        (  0,  55, 140, 22),
+        (  0,  80, 180, 32),
+        (  0, 110, 210, 40),
+        ( 10, 145, 235, 44),
+        ( 50, 175, 255, 46),   # brightest
+        (120, 210, 255, 38),   # near-white highlight
+        (180, 235, 255, 28),   # white glint
+        (120, 210, 255, 38),
+        ( 50, 175, 255, 46),
+        ( 10, 145, 235, 44),
+        (  0, 110, 210, 40),
+        (  0,  80, 180, 32),
+        (  0,  55, 140, 22),
+        (  0,  35, 100, 12),   # fade out
+        (  0,  20,  70,  0),   # gap ×1
+    ]
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+
+        self._phases:  list[float] = []
+        self._speeds:  list[float] = []
+        self._pat_arr = None   # numpy array (pat_h, 4) uint8
+        self._imgbuf  = None   # keep QImage backing buffer alive
+
+        self._timer = QTimer(self)
+        self._timer.setInterval(1000 // self._FPS)
+        self._timer.timeout.connect(self._tick)
+
+        if _HAS_NUMPY:
+            self._build_pat()
+            self._init_columns()
+
+        self.resize(parent.size())
+        self.raise_()
+
+    # ── Setup ─────────────────────────────────────────────────────────────────
+
+    def _build_pat(self):
+        arr = _np.array(
+            [[r, g, b, a] for r, g, b, a in self._PAT], dtype=_np.uint8
+        )
+        self._pat_arr = arr
+
+    def _init_columns(self):
+        w     = max(self.width(), 1)
+        n     = w // self._COL_W + 2
+        pat_h = len(self._PAT)
+        self._phases = [random.uniform(0, pat_h) for _ in range(n)]
+        self._speeds = [
+            self._SPEED + random.uniform(-0.6, 0.6) for _ in range(n)
+        ]
+
+    # ── Per-frame update ───────────────────────────────────────────────────────
+
+    def _tick(self):
+        pat_h = len(self._PAT)
+        for i in range(len(self._phases)):
+            self._phases[i] = (self._phases[i] + self._speeds[i]) % pat_h
+        self.update()
+
+    # ── Painting ──────────────────────────────────────────────────────────────
+
+    def paintEvent(self, _event):
+        if not _HAS_NUMPY or self._pat_arr is None or not self._phases:
+            return
+        from PySide6.QtGui import QImage
+
+        h   = max(self.height(), 1)
+        w   = max(self.width(),  1)
+        cw  = self._COL_W
+        pat = self._pat_arr
+        ph  = len(self._PAT)
+
+        y_idx     = _np.arange(h, dtype=_np.int32)            # (h,)
+        phase_int = _np.array(self._phases, dtype=_np.int32)  # (n,)
+
+        # idx[y, col] = (y + phase[col]) % ph  →  shape (h, n)
+        idx    = (y_idx[:, _np.newaxis] + phase_int[_np.newaxis, :]) % ph
+        colors = pat[idx]                     # (h, n, 4)
+
+        # Expand each logical column to cw screen pixels wide, clip to w
+        wide = colors.repeat(cw, axis=1)[:, :w, :]
+        buf  = wide.tobytes()
+        self._imgbuf = buf                    # prevent GC while QImage exists
+        img  = QImage(buf, wide.shape[1], h, wide.shape[1] * 4,
+                      QImage.Format.Format_RGBA8888)
+        QPainter(self).drawImage(0, 0, img)
+
+    # ── Resize ────────────────────────────────────────────────────────────────
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if _HAS_NUMPY:
+            self._init_columns()
+
+    # ── Public API ────────────────────────────────────────────────────────────
+
+    def start(self):
+        if not _HAS_NUMPY:
+            return
+        self.show()
+        self.raise_()
+        self._timer.start()
+
+    def stop(self):
+        self._timer.stop()
+        self.hide()
+
+    def is_running(self) -> bool:
+        return self._timer.isActive()
+
+
 # ── Blood ripple overlay ────────────────────────────────────────────────────────
 
 class BloodRippleOverlay(QWidget):
