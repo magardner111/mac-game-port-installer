@@ -1163,12 +1163,27 @@ class BloodRippleOverlay(QWidget):
             ))
         return {
             "x": float(x), "y": float(y),
-            "vy": 0.0,                          # starts still, eases into fall
+            "vy": 0.0,
             "alpha": random.randint(170, 220),
             "radius": radius,
             "rx_scale": random.uniform(0.75, 1.25),
             "ry_scale": random.uniform(0.55, 1.0),
             "spatter": spatter,
+            "kind": "blob",
+        }
+
+    def _make_trail_drop(self, x, y):
+        """Small drop that spawns in the smear trail, falls fast, fades slowly."""
+        return {
+            "x": float(x) + random.uniform(-4, 4),
+            "y": float(y),
+            "vy": random.uniform(1.5, 3.5),
+            "alpha": random.randint(160, 210),
+            "radius": random.uniform(1.2, 2.8),
+            "rx_scale": 1.0,
+            "ry_scale": 1.0,
+            "spatter": [],
+            "kind": "drop",
         }
 
     def _update_movement(self):
@@ -1190,6 +1205,9 @@ class BloodRippleOverlay(QWidget):
                     by = ly + (wy - ly) * t
                     if 0 <= bx <= self.width() and 0 <= by <= self.height():
                         self._smear_blobs.append(self._make_smear_blob(bx, by, speed))
+                        # Occasionally spawn a small falling drop in the trail
+                        if random.random() < 0.35:
+                            self._smear_blobs.append(self._make_trail_drop(bx, by))
                 if not self._smear_active:
                     self._smear_active = True
                     self._smear_sound_played = False
@@ -1210,9 +1228,13 @@ class BloodRippleOverlay(QWidget):
         # Tick smear blob physics — drift down, fade out
         alive = []
         for b in self._smear_blobs:
-            b["vy"] = min(b["vy"] + 0.04, 1.2)   # gentle ease-in, slow max fall
-            b["y"]  += b["vy"]
-            b["alpha"] -= 3                        # smooth, gradual fade
+            if b["kind"] == "drop":
+                b["vy"] = min(b["vy"] + 0.18, 5.0)  # fast fall
+                b["alpha"] -= 2                       # slow fade
+            else:
+                b["vy"] = min(b["vy"] + 0.04, 1.2)  # slow ease-in
+                b["alpha"] -= 3                       # medium fade
+            b["y"] += b["vy"]
             if b["alpha"] > 0:
                 alive.append(b)
         self._smear_blobs = alive
