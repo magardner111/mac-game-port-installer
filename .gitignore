@@ -15,6 +15,7 @@ settings.json
 # Runtime-generated files
 release_cache.json
 build.log
+error.log
 
 # Python packaging
 *.egg-info/
@@ -22,3 +23,4 @@ dist/
 
 # Virtual environments
 venv/
+.venv/

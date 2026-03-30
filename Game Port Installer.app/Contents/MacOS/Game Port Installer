@@ -1,6 +1,14 @@
 #!/bin/bash
-# Navigate from MacOS/ up three levels to the project root
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+
 DIR="$(cd "$(dirname "$0")/../../../" && pwd)"
 cd "$DIR"
 
-exec "$DIR/.venv/bin/python3" main.py
+LOG="$DIR/error.log"
+
+python3 main.py 2>"$LOG"
+
+if [ $? -ne 0 ]; then
+    ERROR=$(cat "$LOG")
+    osascript -e "display dialog \"Game Port Installer encountered an error:\n\n$ERROR\n\nSee error.log for details.\" buttons {\"OK\"} with icon stop"
+fi
