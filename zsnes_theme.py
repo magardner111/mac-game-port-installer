@@ -1105,34 +1105,35 @@ class WaterfallOverlay(QWidget):
         # Steam particles: spawn at bottom, rise upward and fade
         w = max(self.width(), 1)
         h = max(self.height(), 1)
-        for _ in range(8):
-            r = random.uniform(7, 17)
-            # Spatter: biased upward (negative dy), scattered sideways
-            spatter = []
-            for _ in range(random.randint(4, 8)):
-                dist = random.uniform(r * 0.7, r * 2.2)
-                spatter.append((
-                    random.uniform(-dist, dist),           # dx — any direction
-                    random.uniform(-dist * 1.4, dist * 0.3),  # dy — biased up
-                    random.uniform(1.0, 3.0),              # spray dot radius
-                ))
-            self._steam.append({
-                "x":        random.uniform(0, w),
-                "y":        float(h - random.randint(0, 18)),
-                "vy":       random.uniform(-0.5, -1.3),
-                "vx":       random.uniform(-0.2, 0.2),
-                "alpha":    random.uniform(60, 100),
-                "fade":     random.uniform(0.5, 0.8),
-                "r":        r,
-                "rx_scale": random.uniform(0.8, 1.3),
-                "ry_scale": random.uniform(0.6, 1.1),
-                "spatter":  spatter,
-            })
+        _STEAM_MAX = 40   # hard cap — never more than this alive at once
+        if len(self._steam) < _STEAM_MAX:
+            for _ in range(3):
+                r = random.uniform(7, 17)
+                spatter = []
+                for _ in range(random.randint(3, 6)):
+                    dist = random.uniform(r * 0.7, r * 2.2)
+                    spatter.append((
+                        random.uniform(-dist, dist),
+                        random.uniform(-dist * 1.4, dist * 0.3),
+                        random.uniform(1.0, 3.0),
+                    ))
+                self._steam.append({
+                    "x":        random.uniform(0, w),
+                    "y":        float(h - random.randint(0, 18)),
+                    "vy":       random.uniform(-0.5, -1.3),
+                    "vx":       random.uniform(-0.2, 0.2),
+                    "alpha":    random.uniform(55, 90),
+                    "fade":     random.uniform(1.2, 1.8),   # faster fade → shorter life
+                    "r":        r,
+                    "rx_scale": random.uniform(0.8, 1.3),
+                    "ry_scale": random.uniform(0.6, 1.1),
+                    "spatter":  spatter,
+                })
         for s in self._steam:
             s["y"]     += s["vy"]
             s["x"]     += s["vx"]
             s["alpha"] -= s["fade"]
-            s["r"]     += 0.06   # expand slightly as it rises
+            s["r"]     += 0.06
         self._steam = [s for s in self._steam if s["alpha"] > 0]
 
         self.update()
