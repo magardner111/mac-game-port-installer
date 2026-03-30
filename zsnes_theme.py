@@ -1147,24 +1147,49 @@ class BloodRippleOverlay(QWidget):
 
 
     def _spawn_trail_rings(self):
-        """Emit small blood ripples from the wrist as the cursor moves."""
+        """Emit layered elliptical blood ripples from the cursor as it moves."""
         import math
         wx, wy = self._wrist_pos()
         if self._last_wrist is not None:
             lx, ly = self._last_wrist
             dist = math.hypot(wx - lx, wy - ly)
             self._move_accum += dist
-            # Emit a ring every ~18 px of cursor travel
-            if self._move_accum >= 18:
+            # Emit a ripple group every ~7 px of cursor travel
+            if self._move_accum >= 7:
                 self._move_accum = 0.0
                 if 0 <= wx <= self.width() and 0 <= wy <= self.height():
+                    # Inner ring — small, bright, fast
                     self._rings.append({
                         "x": wx, "y": wy,
-                        "r": 1.0,
-                        "alpha": random.randint(110, 160),
-                        "color": random.choice(self._RING_COLORS),
-                        "speed": random.uniform(1.0, 1.8),
-                        "max_r": random.uniform(18, 32),
+                        "r": 1.0, "ry_ratio": 0.55,
+                        "alpha": 200,
+                        "color": QColor(210, 30, 30),
+                        "speed": 3.2,
+                        "max_r": random.uniform(18, 26),
+                        "width": 1.5,
+                        "trail": True,
+                    })
+                    # Outer ring — larger, softer, slower
+                    self._rings.append({
+                        "x": wx, "y": wy,
+                        "r": 4.0, "ry_ratio": 0.5,
+                        "alpha": 130,
+                        "color": QColor(160, 10, 10),
+                        "speed": 2.0,
+                        "max_r": random.uniform(28, 44),
+                        "width": 1.0,
+                        "trail": True,
+                    })
+                    # Tiny bright center flash
+                    self._rings.append({
+                        "x": wx, "y": wy,
+                        "r": 0.5, "ry_ratio": 0.5,
+                        "alpha": 240,
+                        "color": QColor(255, 80, 80),
+                        "speed": 4.5,
+                        "max_r": 8,
+                        "width": 2.0,
+                        "trail": True,
                     })
         self._last_wrist = (wx, wy)
 
@@ -1278,15 +1303,17 @@ class BloodRippleOverlay(QWidget):
                 self._DROP_RADIUS * 2,
             )
 
-        # Draw ripple rings
+        # Draw ripple rings — trail rings are flattened ellipses, impact rings are circles
         for ring in self._rings:
             c = QColor(ring["color"])
             c.setAlpha(max(0, int(ring["alpha"])))
-            pen = QPen(c, self._RING_WIDTH)
+            pen = QPen(c, ring.get("width", self._RING_WIDTH))
             p.setPen(pen)
             p.setBrush(Qt.BrushStyle.NoBrush)
-            r = int(ring["r"])
-            p.drawEllipse(int(ring["x"]) - r, int(ring["y"]) - r, r * 2, r * 2)
+            rx = ring["r"]
+            ry = rx * ring.get("ry_ratio", 1.0)
+            cx, cy = int(ring["x"]), int(ring["y"])
+            p.drawEllipse(cx - int(rx), cy - int(ry), int(rx) * 2, int(ry) * 2)
 
     # ── Resize ────────────────────────────────────────────────────────────────
 
