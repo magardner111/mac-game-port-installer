@@ -1166,7 +1166,7 @@ class BloodRippleOverlay(QWidget):
         h = self.height()
         w = self.width()
 
-        self._spawn_trail_rings()
+        self._update_wrist_pos()
 
         surviving = []
         for d in self._drops:
