@@ -31,7 +31,7 @@ from PySide6.QtGui import QCursor, QPalette
 from PySide6.QtWidgets import (
     QAbstractButton, QApplication, QLabel, QPushButton,
     QProxyStyle, QSizePolicy, QStyle,
-    QStyleOptionButton, QStyleOptionViewItem,
+    QStyleOptionButton, QStyleOptionMenuItem, QStyleOptionViewItem,
     QStyledItemDelegate, QWidget,
 )
 
@@ -647,13 +647,12 @@ class UpperCaseStyle(QProxyStyle):
     directly), so those are handled separately by UpperCaseLabelFilter.
     """
 
-    _TEXT_CONTROLS = {
+    _BUTTON_CONTROLS = {
         QStyle.ControlElement.CE_PushButtonLabel,
         QStyle.ControlElement.CE_CheckBoxLabel,
         QStyle.ControlElement.CE_RadioButtonLabel,
         QStyle.ControlElement.CE_TabBarTabLabel,
         QStyle.ControlElement.CE_ToolButtonLabel,
-        QStyle.ControlElement.CE_MenuItem,
     }
 
     def drawItemText(self, painter, rect, flags, palette, enabled, text,
@@ -662,8 +661,12 @@ class UpperCaseStyle(QProxyStyle):
                              text.upper(), textRole)
 
     def drawControl(self, element, option, painter, widget=None):
-        if element in self._TEXT_CONTROLS:
+        if element in self._BUTTON_CONTROLS:
             opt = QStyleOptionButton(option)
+            opt.text = opt.text.upper()
+            super().drawControl(element, opt, painter, widget)
+        elif element == QStyle.ControlElement.CE_MenuItem:
+            opt = QStyleOptionMenuItem(option)
             opt.text = opt.text.upper()
             super().drawControl(element, opt, painter, widget)
         elif element == QStyle.ControlElement.CE_ItemViewItem:
