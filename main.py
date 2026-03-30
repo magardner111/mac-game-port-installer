@@ -836,6 +836,10 @@ class MainWindow(QMainWindow):
                 self._toggle_blood(True)
         # Catch double-clicks on any child widget for the blood gush
         QApplication.instance().installEventFilter(self)
+        # Pause/resume all effects when the app loses/gains focus
+        QApplication.instance().applicationStateChanged.connect(
+            self._on_app_state_changed
+        )
 
     def _build_ui(self):
         central = QWidget()
@@ -963,6 +967,22 @@ class MainWindow(QMainWindow):
         token_action = QAction("Add GitHub Token…", self)
         token_action.triggered.connect(self._show_token_dialog)
         smenu.addAction(token_action)
+
+    def _on_app_state_changed(self, state):
+        from PySide6.QtCore import Qt as _Qt
+        active = (state == _Qt.ApplicationState.ApplicationActive)
+        effects = [self._snow, self._fire, self._waterfall, self._blood]
+        for obj in effects:
+            if obj is not None and obj.is_running():
+                if active:
+                    obj.resume()
+                else:
+                    obj.pause()
+        if self._cursor_anim is not None and self._cursor_anim.is_running():
+            if active:
+                self._cursor_anim.resume()
+            else:
+                self._cursor_anim.pause()
 
     def _toggle_snow(self, enabled: bool):
         app_settings.set_value("snow_effect", enabled)

@@ -778,13 +778,25 @@ class CursorAnimator(QObject):
     def start(self):
         if not self._cursors:
             return
+        self._active = True
         QApplication.setOverrideCursor(self._cursors[0])
         if len(self._cursors) > 1:
             self._timer.start()
 
     def stop(self):
+        self._active = False
         self._timer.stop()
         QApplication.restoreOverrideCursor()
+
+    def pause(self):
+        self._timer.stop()
+
+    def resume(self):
+        if self._active:
+            self._timer.start()
+
+    def is_running(self) -> bool:
+        return self._active
 
     def _advance(self):
         self._idx = (self._idx + 1) % len(self._cursors)
@@ -882,16 +894,26 @@ class SnowOverlay(QWidget):
     # ── Public API ────────────────────────────────────────────────────────────
 
     def start(self):
+        self._active = True
         self.show()
         self.raise_()
         self._timer.start()
 
     def stop(self):
+        self._active = False
         self._timer.stop()
         self.hide()
 
+    def pause(self):
+        self._timer.stop()
+
+    def resume(self):
+        if self._active:
+            self.raise_()
+            self._timer.start()
+
     def is_running(self) -> bool:
-        return self._timer.isActive()
+        return self._active
 
 
 # ── Fire overlay ────────────────────────────────────────────────────────────────
@@ -1003,16 +1025,26 @@ class FireOverlay(QWidget):
     def start(self):
         if not _HAS_NUMPY:
             return
+        self._active = True
         self.show()
         self.raise_()
         self._timer.start()
 
     def stop(self):
+        self._active = False
         self._timer.stop()
         self.hide()
 
+    def pause(self):
+        self._timer.stop()
+
+    def resume(self):
+        if self._active:
+            self.raise_()
+            self._timer.start()
+
     def is_running(self) -> bool:
-        return self._timer.isActive()
+        return self._active
 
 
 # ── Waterfall overlay ───────────────────────────────────────────────────────────
@@ -1198,17 +1230,27 @@ class WaterfallOverlay(QWidget):
     def start(self):
         if not _HAS_NUMPY:
             return
+        self._active = True
         self.show()
         self.raise_()
         self._timer.start()
 
     def stop(self):
+        self._active = False
         self._timer.stop()
         self._steam.clear()
         self.hide()
 
+    def pause(self):
+        self._timer.stop()
+
+    def resume(self):
+        if self._active:
+            self.raise_()
+            self._timer.start()
+
     def is_running(self) -> bool:
-        return self._timer.isActive()
+        return self._active
 
 
 # ── Blood ripple overlay ────────────────────────────────────────────────────────
@@ -1579,12 +1621,14 @@ class BloodRippleOverlay(QWidget):
     # ── Public API ────────────────────────────────────────────────────────────
 
     def start(self):
+        self._active = True
         self.show()
         self.raise_()
         self._tick_timer.start()
         self._spawn_timer.start()
 
     def stop(self):
+        self._active = False
         self._tick_timer.stop()
         self._spawn_timer.stop()
         self._drops.clear()
@@ -1598,5 +1642,19 @@ class BloodRippleOverlay(QWidget):
             self._splash_fx.stop()
         self.hide()
 
+    def pause(self):
+        self._tick_timer.stop()
+        self._spawn_timer.stop()
+        for fx in self._drip_effects.values():
+            fx.stop()
+        if self._splash_fx:
+            self._splash_fx.stop()
+
+    def resume(self):
+        if self._active:
+            self.raise_()
+            self._tick_timer.start()
+            self._spawn_timer.start()
+
     def is_running(self) -> bool:
-        return self._tick_timer.isActive()
+        return self._active
