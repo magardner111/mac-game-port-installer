@@ -1,39 +1,6 @@
 #!/bin/bash
-# Add Homebrew and common Python locations to PATH
-export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
-
 # Navigate from MacOS/ up three levels to the project root
 DIR="$(cd "$(dirname "$0")/../../../" && pwd)"
 cd "$DIR"
 
-VENV="$DIR/.venv"
-PYTHON="$VENV/bin/python3"
-SENTINEL="$VENV/.setup_complete"
-
-# Only run setup if the sentinel file is missing
-if [ ! -f "$SENTINEL" ]; then
-    osascript - "$DIR" "$VENV" "$SENTINEL" <<'APPLESCRIPT'
-        on run argv
-            set projectDir to item 1 of argv
-            set venvDir to item 2 of argv
-            set sentinel to item 3 of argv
-            set setupScript to "cd " & quoted form of projectDir & " && " & ¬
-                "echo '=== Game Port Installer Setup ===' && " & ¬
-                "echo 'Setting up Python environment (one-time only)...' && " & ¬
-                "echo '' && " & ¬
-                "python3 -m venv " & quoted form of venvDir & " && " & ¬
-                quoted form of venvDir & "/bin/pip install --upgrade pip --quiet && " & ¬
-                quoted form of venvDir & "/bin/pip install -r requirements.txt && " & ¬
-                "touch " & quoted form of sentinel & " && " & ¬
-                "echo '' && echo '✅ Setup complete! Close this window and launch the app again.' || " & ¬
-                "echo '' && echo '❌ Setup failed. Make sure Python 3 is installed (brew install python3).'"
-            tell application "Terminal"
-                activate
-                do script setupScript
-            end tell
-        end run
-APPLESCRIPT
-    exit 0
-fi
-
-exec "$PYTHON" main.py
+exec "$DIR/.venv/bin/python3" main.py
