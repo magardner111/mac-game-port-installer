@@ -1163,7 +1163,7 @@ class BloodRippleOverlay(QWidget):
             ))
         return {
             "x": float(x), "y": float(y),
-            "vy": random.uniform(0.0, 0.4),
+            "vy": 0.0,                          # starts still, eases into fall
             "alpha": random.randint(170, 220),
             "radius": radius,
             "rx_scale": random.uniform(0.75, 1.25),
@@ -1210,9 +1210,9 @@ class BloodRippleOverlay(QWidget):
         # Tick smear blob physics — drift down, fade out
         alive = []
         for b in self._smear_blobs:
-            b["vy"] = min(b["vy"] + 0.12, 2.8)
+            b["vy"] = min(b["vy"] + 0.04, 1.2)   # gentle ease-in, slow max fall
             b["y"]  += b["vy"]
-            b["alpha"] -= random.randint(4, 8)
+            b["alpha"] -= 3                        # smooth, gradual fade
             if b["alpha"] > 0:
                 alive.append(b)
         self._smear_blobs = alive
