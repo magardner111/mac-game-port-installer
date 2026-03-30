@@ -1239,7 +1239,8 @@ class BloodRippleOverlay(QWidget):
                     self._gush_splash_pending = False
                     if self._splash_fx:
                         self._splash_fx.play()
-                elif not d.get("is_gush"):
+                elif not d.get("is_gush") and len(d["trail"]) >= 5:
+                    # Only play if the drop actually fell a visible distance
                     self._play_drip_sound()
                 # Impact ring
                 self._rings.append({
