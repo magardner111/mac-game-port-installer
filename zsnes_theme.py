@@ -1065,6 +1065,7 @@ class WaterfallOverlay(QWidget):
         self._speeds:  list[float] = []
         self._pat_arr = None   # numpy array (pat_h, 4) uint8
         self._imgbuf  = None   # keep QImage backing buffer alive
+        self._steam:   list[dict] = []
 
         self._timer = QTimer(self)
         self._timer.setInterval(1000 // self._FPS)
@@ -1100,6 +1101,27 @@ class WaterfallOverlay(QWidget):
         pat_h = len(self._PAT)
         for i in range(len(self._phases)):
             self._phases[i] = (self._phases[i] + self._speeds[i]) % pat_h
+
+        # Steam particles: spawn at bottom, rise upward and fade
+        w = max(self.width(), 1)
+        h = max(self.height(), 1)
+        for _ in range(4):
+            self._steam.append({
+                "x":     random.uniform(0, w),
+                "y":     float(h - random.randint(0, 18)),
+                "vy":    random.uniform(-0.5, -1.3),
+                "vx":    random.uniform(-0.2, 0.2),
+                "alpha": random.uniform(35, 65),
+                "fade":  random.uniform(0.7, 1.1),
+                "r":     random.uniform(4, 11),
+            })
+        for s in self._steam:
+            s["y"]     += s["vy"]
+            s["x"]     += s["vx"]
+            s["alpha"] -= s["fade"]
+            s["r"]     += 0.08   # expand slightly as it rises
+        self._steam = [s for s in self._steam if s["alpha"] > 0]
+
         self.update()
 
     # ── Painting ──────────────────────────────────────────────────────────────
@@ -1118,8 +1140,8 @@ class WaterfallOverlay(QWidget):
         y_idx     = _np.arange(h, dtype=_np.int32)            # (h,)
         phase_int = _np.array(self._phases, dtype=_np.int32)  # (n,)
 
-        # idx[y, col] = (y + phase[col]) % ph  →  shape (h, n)
-        idx    = (y_idx[:, _np.newaxis] + phase_int[_np.newaxis, :]) % ph
+        # idx[y, col] = (y - phase[col]) % ph → pattern scrolls downward
+        idx    = (y_idx[:, _np.newaxis] - phase_int[_np.newaxis, :]) % ph
         colors = pat[idx]                     # (h, n, 4)
 
         # Expand each logical column to cw screen pixels wide, clip to w
@@ -1128,7 +1150,17 @@ class WaterfallOverlay(QWidget):
         self._imgbuf = buf                    # prevent GC while QImage exists
         img  = QImage(buf, wide.shape[1], h, wide.shape[1] * 4,
                       QImage.Format.Format_RGBA8888)
-        QPainter(self).drawImage(0, 0, img)
+        p = QPainter(self)
+        p.drawImage(0, 0, img)
+
+        # Steam: soft rising puffs at the bottom
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        for s in self._steam:
+            a = max(0, min(255, int(s["alpha"])))
+            r = int(s["r"])
+            p.setBrush(QColor(210, 235, 255, a))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawEllipse(int(s["x"] - r), int(s["y"] - r), r * 2, r * 2)
 
     # ── Resize ────────────────────────────────────────────────────────────────
 
@@ -1148,6 +1180,7 @@ class WaterfallOverlay(QWidget):
 
     def stop(self):
         self._timer.stop()
+        self._steam.clear()
         self.hide()
 
     def is_running(self) -> bool:
