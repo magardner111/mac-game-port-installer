@@ -8,22 +8,25 @@ cd "$DIR"
 
 VENV="$DIR/.venv"
 PYTHON="$VENV/bin/python3"
+SENTINEL="$VENV/.setup_complete"
 
-# If the venv doesn't exist or is missing packages, set it up in a visible Terminal
-if [ ! -f "$PYTHON" ] || ! "$PYTHON" -c "import PySide6, py7zr, xxhash, numpy" 2>/dev/null; then
-    osascript - "$DIR" "$VENV" <<'APPLESCRIPT'
+# Only run setup if the sentinel file is missing
+if [ ! -f "$SENTINEL" ]; then
+    osascript - "$DIR" "$VENV" "$SENTINEL" <<'APPLESCRIPT'
         on run argv
             set projectDir to item 1 of argv
             set venvDir to item 2 of argv
+            set sentinel to item 3 of argv
             set setupScript to "cd " & quoted form of projectDir & " && " & ¬
                 "echo '=== Game Port Installer Setup ===' && " & ¬
-                "echo 'Setting up Python environment...' && " & ¬
+                "echo 'Setting up Python environment (one-time only)...' && " & ¬
+                "echo '' && " & ¬
                 "python3 -m venv " & quoted form of venvDir & " && " & ¬
                 quoted form of venvDir & "/bin/pip install --upgrade pip --quiet && " & ¬
                 quoted form of venvDir & "/bin/pip install -r requirements.txt && " & ¬
-                "echo '' && echo 'Setup complete! You can close this window.' && " & ¬
-                "echo 'Launch the app again to start.' || " & ¬
-                "echo 'ERROR: Setup failed. Make sure Python 3 is installed.'"
+                "touch " & quoted form of sentinel & " && " & ¬
+                "echo '' && echo '✅ Setup complete! Close this window and launch the app again.' || " & ¬
+                "echo '' && echo '❌ Setup failed. Make sure Python 3 is installed (brew install python3).'"
             tell application "Terminal"
                 activate
                 do script setupScript
