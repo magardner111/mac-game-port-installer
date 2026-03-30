@@ -5,4 +5,11 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 # Navigate from MacOS/ up three levels to the project root
 DIR="$(cd "$(dirname "$0")/../../../" && pwd)"
 cd "$DIR"
+
+# Auto-install Python dependencies if any are missing
+python3 -c "import PySide6, py7zr, xxhash, numpy" 2>/dev/null || {
+    python3 -m pip install -r requirements.txt --quiet --break-system-packages 2>/dev/null \
+    || python3 -m pip install -r requirements.txt --quiet
+}
+
 exec arch -arm64 python3 main.py
