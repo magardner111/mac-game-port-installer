@@ -313,10 +313,21 @@ QComboBox {{
 }}
 QComboBox QAbstractItemView {{
     background-color: {BG_PANEL};
-    color: {YELLOW};
+    color: {GREEN};
     selection-background-color: {SEL_BG};
     selection-color: {WHITE};
     border: 1px solid {BEVEL_HI};
+    outline: 0;
+}}
+QComboBox QAbstractItemView::item {{
+    color: {GREEN};
+    background-color: {BG_PANEL};
+    padding: 4px 6px;
+    min-height: 20px;
+}}
+QComboBox QAbstractItemView::item:selected {{
+    background-color: {SEL_BG};
+    color: {WHITE};
 }}
 QComboBox::drop-down {{ border: none; width: 16px; }}
 
