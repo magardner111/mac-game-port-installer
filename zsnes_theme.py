@@ -1105,11 +1105,11 @@ class WaterfallOverlay(QWidget):
         # Steam particles: spawn at bottom, rise upward and fade
         w = max(self.width(), 1)
         h = max(self.height(), 1)
-        for _ in range(4):
-            r = random.uniform(4, 11)
+        for _ in range(10):
+            r = random.uniform(8, 20)
             # Spatter: biased upward (negative dy), scattered sideways
             spatter = []
-            for _ in range(random.randint(3, 7)):
+            for _ in range(random.randint(5, 10)):
                 dist = random.uniform(r * 0.7, r * 2.2)
                 spatter.append((
                     random.uniform(-dist, dist),           # dx — any direction
@@ -1121,8 +1121,8 @@ class WaterfallOverlay(QWidget):
                 "y":        float(h - random.randint(0, 18)),
                 "vy":       random.uniform(-0.5, -1.3),
                 "vx":       random.uniform(-0.2, 0.2),
-                "alpha":    random.uniform(35, 65),
-                "fade":     random.uniform(0.7, 1.1),
+                "alpha":    random.uniform(60, 100),
+                "fade":     random.uniform(0.5, 0.8),
                 "r":        r,
                 "rx_scale": random.uniform(0.8, 1.3),
                 "ry_scale": random.uniform(0.6, 1.1),
