@@ -943,6 +943,7 @@ class FireOverlay(QWidget):
         self._fh     = 0
         self._pal    = None
         self._imgbuf = None
+        self._smoke: list[dict] = []
 
         self._timer = QTimer(self)
         self._timer.setInterval(1000 // self._FPS)
@@ -990,6 +991,42 @@ class FireOverlay(QWidget):
         avg     = (below.astype(_np.int32) + left_below + right_below) // 3
         cooling = _np.random.randint(0, 22, (h - 1, w))
         fire[:-1, :] = _np.clip(avg - cooling, 0, 255)
+
+        # Smoke: dark puffs rise from the top of the fire band
+        _SMOKE_MAX = 45
+        sw = max(self.width(), 1)
+        sh = max(self.height(), 1)
+        fire_top = int(sh * 0.65)   # spawn near where fire fades out
+        if len(self._smoke) < _SMOKE_MAX:
+            for _ in range(3):
+                r = random.uniform(7, 18)
+                spatter = []
+                for _ in range(random.randint(3, 6)):
+                    dist = random.uniform(r * 0.6, r * 2.0)
+                    spatter.append((
+                        random.uniform(-dist, dist),
+                        random.uniform(-dist * 1.3, dist * 0.4),
+                        random.uniform(1.0, 3.5),
+                    ))
+                self._smoke.append({
+                    "x":        random.uniform(0, sw),
+                    "y":        float(fire_top + random.randint(-10, 10)),
+                    "vy":       random.uniform(-0.6, -1.4),
+                    "vx":       random.uniform(-0.25, 0.25),
+                    "alpha":    random.uniform(50, 85),
+                    "fade":     random.uniform(1.0, 1.6),
+                    "r":        r,
+                    "rx_scale": random.uniform(0.8, 1.3),
+                    "ry_scale": random.uniform(0.6, 1.1),
+                    "spatter":  spatter,
+                })
+        for s in self._smoke:
+            s["y"]     += s["vy"]
+            s["x"]     += s["vx"]
+            s["alpha"] -= s["fade"]
+            s["r"]     += 0.07
+        self._smoke = [s for s in self._smoke if s["alpha"] > 0]
+
         self.update()
 
     def paintEvent(self, _event):
@@ -1015,7 +1052,25 @@ class FireOverlay(QWidget):
         self._imgbuf = scaled.tobytes()
         img = QImage(self._imgbuf, iw, ih, iw * 4,
                      QImage.Format.Format_RGBA8888)
-        QPainter(self).drawImage(0, 0, img)
+        p = QPainter(self)
+        p.drawImage(0, 0, img)
+
+        # Smoke: dark gray puffs rising above the fire
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setPen(Qt.PenStyle.NoPen)
+        for s in self._smoke:
+            a  = max(0, min(255, int(s["alpha"])))
+            cx, cy = int(s["x"]), int(s["y"])
+            rx = max(1, int(s["r"] * s["rx_scale"]))
+            ry = max(1, int(s["r"] * s["ry_scale"]))
+            p.setBrush(QColor(55, 50, 48, a))
+            p.drawEllipse(cx - rx, cy - ry, rx * 2, ry * 2)
+            for (dx, dy, sr) in s["spatter"]:
+                sa = max(0, int(a * random.uniform(0.2, 0.5)))
+                sr2 = max(1, int(sr))
+                p.setBrush(QColor(45, 40, 38, sa))
+                p.drawEllipse(cx + int(dx) - sr2, cy + int(dy) - sr2,
+                              sr2 * 2, sr2 * 2)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -1033,6 +1088,7 @@ class FireOverlay(QWidget):
     def stop(self):
         self._active = False
         self._timer.stop()
+        self._smoke.clear()
         self.hide()
 
     def pause(self):
