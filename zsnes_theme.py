@@ -1290,6 +1290,12 @@ class BloodRippleOverlay(QWidget):
     def stop(self):
         self._tick_timer.stop()
         self._spawn_timer.stop()
+        self._drops.clear()
+        self._rings.clear()
+        for fx in self._drip_effects.values():
+            fx.stop()
+        if self._splash_fx:
+            self._splash_fx.stop()
         self.hide()
 
     def is_running(self) -> bool:
