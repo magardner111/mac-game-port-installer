@@ -1146,52 +1146,9 @@ class BloodRippleOverlay(QWidget):
             self._drops.append(drop)
 
 
-    def _spawn_trail_rings(self):
-        """Emit layered elliptical blood ripples from the cursor as it moves."""
-        import math
-        wx, wy = self._wrist_pos()
-        if self._last_wrist is not None:
-            lx, ly = self._last_wrist
-            dist = math.hypot(wx - lx, wy - ly)
-            self._move_accum += dist
-            # Emit a ripple group every ~7 px of cursor travel
-            if self._move_accum >= 7:
-                self._move_accum = 0.0
-                if 0 <= wx <= self.width() and 0 <= wy <= self.height():
-                    # Inner ring — small, bright, fast
-                    self._rings.append({
-                        "x": wx, "y": wy,
-                        "r": 1.0, "ry_ratio": 0.55,
-                        "alpha": 200,
-                        "color": QColor(210, 30, 30),
-                        "speed": 3.2,
-                        "max_r": random.uniform(18, 26),
-                        "width": 1.5,
-                        "trail": True,
-                    })
-                    # Outer ring — larger, softer, slower
-                    self._rings.append({
-                        "x": wx, "y": wy,
-                        "r": 4.0, "ry_ratio": 0.5,
-                        "alpha": 130,
-                        "color": QColor(160, 10, 10),
-                        "speed": 2.0,
-                        "max_r": random.uniform(28, 44),
-                        "width": 1.0,
-                        "trail": True,
-                    })
-                    # Tiny bright center flash
-                    self._rings.append({
-                        "x": wx, "y": wy,
-                        "r": 0.5, "ry_ratio": 0.5,
-                        "alpha": 240,
-                        "color": QColor(255, 80, 80),
-                        "speed": 4.5,
-                        "max_r": 8,
-                        "width": 2.0,
-                        "trail": True,
-                    })
-        self._last_wrist = (wx, wy)
+    def _update_wrist_pos(self):
+        """Track wrist position each tick (used for drop spawning)."""
+        self._last_wrist = self._wrist_pos()
 
     def _play_drip_sound(self):
         """Play a random drip WAV, never repeating either of the last two played."""
