@@ -13,4 +13,12 @@ if [ -z "$PYTHON" ]; then
     exit 1
 fi
 
+# Auto-install dependencies if any are missing
+if ! "$PYTHON" -c "import PySide6, py7zr, xxhash, numpy" 2>/dev/null; then
+    echo "Installing dependencies..."
+    "$PYTHON" -m pip install -r "$DIR/requirements.txt" || {
+        "$PYTHON" -m pip install -r "$DIR/requirements.txt" --break-system-packages
+    }
+fi
+
 "$PYTHON" "$DIR/main.py"
