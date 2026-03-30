@@ -1084,14 +1084,8 @@ class BloodRippleOverlay(QWidget):
         self._spawn_timer.setInterval(self._SPAWN_MS)
         self._spawn_timer.timeout.connect(self._spawn_drop)
 
-        # Gush splash — play once when the first gush drop lands
-        self._gush_splash_pending: bool = False
-        self._splash_fx: object = None
-        _splash_path = Path(__file__).parent / "assets" / "drips" / "splash.wav"
-        if _HAS_SOUND and _splash_path.exists():
-            self._splash_fx = _QSoundEffect()
-            self._splash_fx.setSource(QUrl.fromLocalFile(str(_splash_path)))
-            self._splash_fx.setVolume(0.9)
+        # Cooldown to prevent multiple simultaneous impacts (e.g. gush) stacking audio
+        self._last_sound_ms: float = 0.0
 
         self.resize(parent.size())
         self.raise_()
@@ -1130,8 +1124,6 @@ class BloodRippleOverlay(QWidget):
         _ = global_pos  # unused — position comes from cursor wrist
         if not (0 <= x <= self.width() and 0 <= y <= self.height()):
             return
-
-        self._gush_splash_pending = True   # first gush drop to land plays splash.wav
 
         count = random.randint(6, 10)
         for _ in range(count):
@@ -1194,11 +1186,17 @@ class BloodRippleOverlay(QWidget):
         self._last_wrist = (wx, wy)
 
     def _play_drip_sound(self):
-        """Play a random drip WAV, never repeating either of the last two played."""
+        """Play a random drip WAV, never repeating either of the last two played.
+        A 300ms cooldown prevents rapid gush impacts from stacking audio."""
+        import time
+        now = time.monotonic() * 1000
+        if now - self._last_sound_ms < 300:
+            return
+        self._last_sound_ms = now
         if not self._drip_files:
             return
         pool = [f for f in self._drip_files if f not in self._recent_drips]
-        if not pool:           # fallback: all sounds excluded (shouldn't happen with 10)
+        if not pool:
             pool = list(self._drip_files)
         chosen = random.choice(pool)
         self._recent_drips.append(chosen)
@@ -1234,13 +1232,7 @@ class BloodRippleOverlay(QWidget):
 
             if d["y"] >= h - 4:
                 ix, iy = d["x"], float(h - 4)
-                if d.get("is_gush") and self._gush_splash_pending:
-                    # First gush drop to land — play splash once
-                    self._gush_splash_pending = False
-                    if self._splash_fx:
-                        self._splash_fx.play()
-                elif not d.get("is_gush") and len(d["trail"]) >= 5:
-                    # Only play if the drop actually fell a visible distance
+                if len(d["trail"]) >= 5:
                     self._play_drip_sound()
                 # Impact ring
                 self._rings.append({
@@ -1336,8 +1328,6 @@ class BloodRippleOverlay(QWidget):
         self._rings.clear()
         for fx in self._drip_effects.values():
             fx.stop()
-        if self._splash_fx:
-            self._splash_fx.stop()
         self.hide()
 
     def is_running(self) -> bool:
