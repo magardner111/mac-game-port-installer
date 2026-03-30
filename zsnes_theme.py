@@ -1057,9 +1057,10 @@ class BloodRippleOverlay(QWidget):
         self._drops: list[dict] = []   # falling drop particles
         self._rings: list[dict] = []   # expanding ripple rings
 
-        # Last wrist position — used to detect cursor movement for trail rings
+        # Movement tracking — smear when moving, drip when idle
         self._last_wrist: tuple | None = None
-        self._move_accum: float = 0.0   # accumulated distance since last trail ring
+        self._idle_frames: int = 0
+        self._smear: deque = deque(maxlen=30)   # recent wrist positions for smear trail
 
         # Drip sounds — pre-loaded for zero-latency playback
         self._drip_files: list = []
@@ -1146,9 +1147,32 @@ class BloodRippleOverlay(QWidget):
             self._drops.append(drop)
 
 
-    def _update_wrist_pos(self):
-        """Track wrist position each tick (used for drop spawning)."""
-        self._last_wrist = self._wrist_pos()
+    def _update_movement(self):
+        """Detect cursor movement. While moving: show smear, pause drops.
+        When idle: fade smear, resume dripping."""
+        wx, wy = self._wrist_pos()
+        moved = False
+        if self._last_wrist is not None:
+            lx, ly = self._last_wrist
+            moved = (abs(wx - lx) + abs(wy - ly)) > 1
+        self._last_wrist = (wx, wy)
+
+        if moved:
+            self._idle_frames = 0
+            self._smear.append((wx, wy))
+            # Pause spawn timer and clear non-gush drops while moving
+            if self._spawn_timer.isActive():
+                self._spawn_timer.stop()
+            self._drops = [d for d in self._drops if d.get("is_gush")]
+        else:
+            self._idle_frames += 1
+            # Gradually fade the smear while idle
+            if self._smear and self._idle_frames % 2 == 0:
+                self._smear.popleft()
+            # Resume dripping after ~200ms of no movement
+            if self._idle_frames >= 6 and not self._spawn_timer.isActive():
+                self._spawn_timer.setInterval(random.randint(400, 2400))
+                self._spawn_timer.start()
 
     def _play_drip_sound(self):
         """Play a random drip WAV, never repeating either of the last two played."""
@@ -1166,7 +1190,7 @@ class BloodRippleOverlay(QWidget):
         h = self.height()
         w = self.width()
 
-        self._update_wrist_pos()
+        self._update_movement()
 
         surviving = []
         for d in self._drops:
@@ -1227,6 +1251,18 @@ class BloodRippleOverlay(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
+        # Draw blood smear trail while cursor is moving
+        smear = list(self._smear)
+        n = len(smear)
+        if n > 1:
+            p.setPen(Qt.PenStyle.NoPen)
+            for i, (sx, sy) in enumerate(smear):
+                frac = i / (n - 1)
+                alpha = int(210 * frac ** 1.2)
+                radius = max(1, int(2 + 3 * frac))
+                p.setBrush(QColor(180, 10, 10, alpha))
+                p.drawEllipse(int(sx) - radius, int(sy) - radius, radius * 2, radius * 2)
+
         # Draw each drop: wet streak trail + head
         p.setPen(Qt.PenStyle.NoPen)
         for d in self._drops:
@@ -1279,6 +1315,7 @@ class BloodRippleOverlay(QWidget):
         self._spawn_timer.stop()
         self._drops.clear()
         self._rings.clear()
+        self._smear.clear()
         for fx in self._drip_effects.values():
             fx.stop()
         if self._splash_fx:
