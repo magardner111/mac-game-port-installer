@@ -6,7 +6,7 @@ cd "$DIR"
 
 LOG="$DIR/error.log"
 
-python3 main.py 2>"$LOG"
+python3 "$DIR/main.py" 2>"$LOG"
 
 if [ $? -ne 0 ]; then
     ERROR=$(cat "$LOG")
