@@ -1060,7 +1060,7 @@ class BloodRippleOverlay(QWidget):
         # Movement tracking — smear when moving, drip when idle
         self._last_wrist: tuple | None = None
         self._idle_frames: int = 0
-        self._smear: deque = deque(maxlen=30)   # recent wrist positions for smear trail
+        self._smear_blobs: list = []   # active smear particles with physics
 
         # Drip sounds — pre-loaded for zero-latency playback
         self._drip_files: list = []
@@ -1147,32 +1147,66 @@ class BloodRippleOverlay(QWidget):
             self._drops.append(drop)
 
 
+    def _make_smear_blob(self, x, y, speed):
+        """Create a smear blob with physics, variable shape, and spatter."""
+        radius = random.uniform(3.5, 6.5) + min(speed * 0.18, 4.0)
+        spatter = []
+        for _ in range(random.randint(2, 5)):
+            angle = random.uniform(0, 6.28)
+            dist  = random.uniform(radius * 0.8, radius * 2.4)
+            spatter.append((
+                dist * random.uniform(0.6, 1.0) * (1 if random.random() > 0.5 else -1),
+                dist * random.uniform(0.4, 0.9) * (1 if random.random() > 0.5 else -1),
+                random.uniform(0.8, 2.2),
+            ))
+        return {
+            "x": float(x), "y": float(y),
+            "vy": random.uniform(0.0, 0.4),
+            "alpha": random.randint(170, 220),
+            "radius": radius,
+            "rx_scale": random.uniform(0.75, 1.25),
+            "ry_scale": random.uniform(0.55, 1.0),
+            "spatter": spatter,
+        }
+
     def _update_movement(self):
-        """Detect cursor movement. While moving: show smear, pause drops.
-        When idle: fade smear, resume dripping."""
+        """Detect cursor movement. While moving: spawn smear blobs, pause drip spawner.
+        When idle: resume dripping. Already-falling drops are never interrupted."""
+        import math
         wx, wy = self._wrist_pos()
-        moved = False
+        speed = 0.0
         if self._last_wrist is not None:
             lx, ly = self._last_wrist
-            moved = (abs(wx - lx) + abs(wy - ly)) > 1
+            dist = math.hypot(wx - lx, wy - ly)
+            speed = dist
+            if dist > 1:
+                # Interpolate blobs along the movement path so fast swipes stay thick
+                steps = max(1, int(dist / 5))
+                for i in range(steps):
+                    t = (i + 1) / steps
+                    bx = lx + (wx - lx) * t
+                    by = ly + (wy - ly) * t
+                    if 0 <= bx <= self.width() and 0 <= by <= self.height():
+                        self._smear_blobs.append(self._make_smear_blob(bx, by, speed))
+                self._idle_frames = 0
+                if self._spawn_timer.isActive():
+                    self._spawn_timer.stop()
+            else:
+                self._idle_frames += 1
+                if self._idle_frames >= 6 and not self._spawn_timer.isActive():
+                    self._spawn_timer.setInterval(random.randint(400, 2400))
+                    self._spawn_timer.start()
         self._last_wrist = (wx, wy)
 
-        if moved:
-            self._idle_frames = 0
-            self._smear.append((wx, wy))
-            # Pause spawn timer and clear non-gush drops while moving
-            if self._spawn_timer.isActive():
-                self._spawn_timer.stop()
-            self._drops = [d for d in self._drops if d.get("is_gush")]
-        else:
-            self._idle_frames += 1
-            # Gradually fade the smear while idle
-            if self._smear and self._idle_frames % 2 == 0:
-                self._smear.popleft()
-            # Resume dripping after ~200ms of no movement
-            if self._idle_frames >= 6 and not self._spawn_timer.isActive():
-                self._spawn_timer.setInterval(random.randint(400, 2400))
-                self._spawn_timer.start()
+        # Tick smear blob physics — drift down, fade out
+        alive = []
+        for b in self._smear_blobs:
+            b["vy"] = min(b["vy"] + 0.12, 2.8)
+            b["y"]  += b["vy"]
+            b["alpha"] -= random.randint(4, 8)
+            if b["alpha"] > 0:
+                alive.append(b)
+        self._smear_blobs = alive
 
     def _play_drip_sound(self):
         """Play a random drip WAV, never repeating either of the last two played."""
@@ -1251,17 +1285,22 @@ class BloodRippleOverlay(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        # Draw blood smear trail while cursor is moving
-        smear = list(self._smear)
-        n = len(smear)
-        if n > 1:
-            p.setPen(Qt.PenStyle.NoPen)
-            for i, (sx, sy) in enumerate(smear):
-                frac = i / (n - 1)
-                alpha = int(210 * frac ** 1.2)
-                radius = max(1, int(2 + 3 * frac))
-                p.setBrush(QColor(180, 10, 10, alpha))
-                p.drawEllipse(int(sx) - radius, int(sy) - radius, radius * 2, radius * 2)
+        # Draw blood smear blobs — falling, fading, variable-shaped with spatter
+        p.setPen(Qt.PenStyle.NoPen)
+        for b in self._smear_blobs:
+            a = max(0, int(b["alpha"]))
+            cx, cy = int(b["x"]), int(b["y"])
+            # Main blob — squashed ellipse
+            rx = int(b["radius"] * b["rx_scale"])
+            ry = int(b["radius"] * b["ry_scale"])
+            p.setBrush(QColor(190, 12, 12, a))
+            p.drawEllipse(cx - rx, cy - ry, rx * 2, ry * 2)
+            # Overspray dots
+            for (dx, dy, sr) in b["spatter"]:
+                sa = max(0, int(a * random.uniform(0.3, 0.65)))
+                p.setBrush(QColor(160, 8, 8, sa))
+                p.drawEllipse(int(cx + dx) - int(sr), int(cy + dy) - int(sr),
+                              int(sr) * 2, int(sr) * 2)
 
         # Draw each drop: wet streak trail + head
         p.setPen(Qt.PenStyle.NoPen)
@@ -1315,7 +1354,7 @@ class BloodRippleOverlay(QWidget):
         self._spawn_timer.stop()
         self._drops.clear()
         self._rings.clear()
-        self._smear.clear()
+        self._smear_blobs.clear()
         for fx in self._drip_effects.values():
             fx.stop()
         if self._splash_fx:
