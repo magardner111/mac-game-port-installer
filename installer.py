@@ -23,40 +23,38 @@ from scrapers import get_scraper
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 
-def _default_games_dir() -> Path:
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "GamePortInstaller" / "games"
-    if sys.platform == "win32":
-        return Path(os.environ.get("APPDATA", str(Path.home()))) / "GamePortInstaller" / "games"
-    return Path.home() / ".local" / "share" / "GamePortInstaller" / "games"
-
-GAMES_DIR = _default_games_dir()
+GAMES_DIR = Path(__file__).parent / "games"
 
 OS_NAMES = ["macOS", "Linux", "Windows"]
 
 
-def _migrate_old_games_dir() -> None:
-    """Move games from the pre-refactor location into the current GAMES_DIR."""
-    old = Path(__file__).parent / "games"
-    if not old.is_dir():
+def _migrate_to_console_dirs() -> None:
+    """Move flat games/{folder} installs into games/{console}/{folder}."""
+    if not GAMES_DIR.is_dir():
         return
-    GAMES_DIR.mkdir(parents=True, exist_ok=True)
-    for item in old.iterdir():
-        dest = GAMES_DIR / item.name
+    from games import GAMES
+    folder_to_console = {g["folder"]: g.get("console", "Other") for g in GAMES}
+    for item in list(GAMES_DIR.iterdir()):
+        if not item.is_dir() or item.name.startswith("."):
+            continue
+        # Already nested under a console dir — skip
+        if item.name in folder_to_console.values():
+            continue
+        console = folder_to_console.get(item.name)
+        if not console:
+            continue
+        dest = GAMES_DIR / console / item.name
         if not dest.exists():
+            dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(item), dest)
-    try:
-        old.rmdir()   # remove only if now empty
-    except OSError:
-        pass
 
-_migrate_old_games_dir()
+_migrate_to_console_dirs()
 
 
 # ── Release cache ──────────────────────────────────────────────────────────────
 
 def _cache_path() -> Path:
-    return GAMES_DIR.parent / "release_cache.json"
+    return GAMES_DIR.parent / "release_cache.json"  # project root
 
 def _load_cache() -> dict:
     p = _cache_path()
@@ -103,7 +101,8 @@ def pick_asset(release: dict, os_name: str, game: dict = {}) -> dict | None:
 # ── Version tracking ──────────────────────────────────────────────────────────
 
 def game_dir(game: dict, os_name: str = None) -> Path:
-    base = GAMES_DIR / game["folder"]
+    console = game.get("console", "Other")
+    base = GAMES_DIR / console / game["folder"]
     return base / os_name if os_name else base
 
 def installed_version(game: dict, os_name: str = None) -> str | None:
@@ -240,18 +239,24 @@ def _move_from_staging(staging: Path, dest: Path) -> None:
 def _install_dmg(dmg_path: Path, dest: Path) -> None:
     mount_point = Path(tempfile.mkdtemp())
     try:
-        subprocess.run(
+        result = subprocess.run(
             ["hdiutil", "attach", str(dmg_path), "-mountpoint", str(mount_point),
-             "-nobrowse", "-quiet"],
-            check=True,
+             "-nobrowse", "-noverify"],
+            input=b"y\n",   # auto-accept any software license agreement
+            capture_output=True,
         )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"hdiutil attach failed (exit {result.returncode}):\n"
+                + result.stderr.decode(errors="replace").strip()
+            )
         app = _find_app_bundle(mount_point)
         if not app:
             raise RuntimeError(f"No .app bundle found in {dmg_path.name}")
         target = dest / app.name
         if target.exists():
             shutil.rmtree(target)
-        shutil.copytree(str(app), target)
+        shutil.copytree(str(app), target, symlinks=True)
     finally:
         subprocess.run(["hdiutil", "detach", str(mount_point), "-quiet"], check=False)
         shutil.rmtree(mount_point, ignore_errors=True)
@@ -281,23 +286,174 @@ def _find_makefile_dir(dest: Path) -> Path:
     return dest  # fallback
 
 
+def _find_homebrew_gcc(build_env: dict) -> tuple[str | None, str | None]:
+    """Return (gcc_path, g++_path) for the highest-versioned Homebrew GCC, or (None, None)."""
+    hb_bin = Path("/opt/homebrew/bin")
+    gccs = sorted(hb_bin.glob("gcc-[0-9]*"), reverse=True)
+    for gcc in gccs:
+        if gcc.stat().st_mode & 0o111:
+            gxx = hb_bin / gcc.name.replace("gcc-", "g++-")
+            return str(gcc), str(gxx) if gxx.exists() else str(gcc)
+    return None, None
+
+
+def _find_gcc_compatible_sysroot() -> str | None:
+    """
+    Return the path to the newest macOS SDK that Homebrew GCC can parse.
+
+    The macOS 26 SDK introduced xnu_static_assert_struct_size* macros in
+    mach/message.h that Homebrew GCC cannot handle.  Fall back to the
+    newest available SDK whose major version is ≤ 15.
+    """
+    sdks_dir = Path("/Library/Developer/CommandLineTools/SDKs")
+    if not sdks_dir.is_dir():
+        return None
+
+    compatible = []
+    for sdk in sdks_dir.glob("MacOSX*.sdk"):
+        name = sdk.name  # e.g. "MacOSX15.4.sdk"
+        ver_str = name.removeprefix("MacOSX").removesuffix(".sdk")
+        try:
+            major = int(ver_str.split(".")[0])
+        except ValueError:
+            continue
+        if major <= 15:
+            compatible.append((major, ver_str, sdk))
+
+    if not compatible:
+        return None
+
+    # Pick the highest version that is still ≤ 15
+    compatible.sort(key=lambda t: [int(x) for x in t[1].split(".")], reverse=True)
+    return str(compatible[0][2])
+
+
+def _build_cmake(game: dict, build: dict, dest: Path, build_env: dict, _cb) -> None:
+    """Run a cmake configure + build inside dest."""
+    cmake_source_subdir = build.get("cmake_source_subdir", ".")
+
+    # Locate the cmake source dir — it may be nested after extraction/flattening
+    if cmake_source_subdir == ".":
+        cmake_src = dest
+    else:
+        cmake_src = dest / cmake_source_subdir
+        if not cmake_src.exists():
+            # Search recursively for the subdir
+            for candidate in dest.rglob(cmake_source_subdir):
+                if candidate.is_dir():
+                    cmake_src = candidate
+                    break
+
+    if not (cmake_src / "CMakeLists.txt").exists():
+        raise RuntimeError(
+            f"CMakeLists.txt not found in {cmake_src}\n"
+            "Cannot build this game from source."
+        )
+
+    # Use GCC instead of Apple Clang if requested
+    sysroot: str | None = None
+    if build.get("cmake_use_gcc"):
+        gcc, gxx = _find_homebrew_gcc(build_env)
+        if not gcc:
+            raise RuntimeError(
+                "Homebrew GCC is required to build this game.\n\n"
+                "Install it with:  brew install gcc"
+            )
+        build_env["CC"]  = gcc
+        build_env["CXX"] = gxx
+
+        # macOS 26 SDK introduced xnu_static_assert_struct_size* macros that
+        # Homebrew GCC cannot parse.  Use the newest SDK whose major ≤ 15.
+        sysroot = _find_gcc_compatible_sysroot()
+        if sysroot:
+            build_env.setdefault("CFLAGS",   "")
+            build_env.setdefault("CXXFLAGS", "")
+            build_env["CFLAGS"]   = build_env["CFLAGS"].strip() + f" -isysroot {sysroot}"
+            build_env["CXXFLAGS"] = build_env["CXXFLAGS"].strip() + f" -isysroot {sysroot}"
+
+    # Wipe stale cmake cache so a fresh configure always starts clean
+    cmake_build_dir = cmake_src / "build"
+    if cmake_build_dir.exists():
+        shutil.rmtree(cmake_build_dir)
+    cmake_build_dir.mkdir()
+
+    # Configure
+    _cb(88)
+    cmake_args = build.get("cmake_args", [])
+    sysroot_cmake_args = ([f"-DCMAKE_OSX_SYSROOT={sysroot}"] if sysroot else [])
+    configure_cmd = ["cmake", str(cmake_src)] + sysroot_cmake_args + cmake_args
+    result = subprocess.run(
+        configure_cmd, cwd=str(cmake_build_dir), env=build_env,
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        output = (result.stdout + result.stderr).strip()
+        raise RuntimeError(f"CMake configure failed:\n\n{output[-3000:]}")
+
+    # Build
+    _cb(90)
+    jobs = build.get("make_jobs", True)
+    build_cmd = ["cmake", "--build", "."]
+    if jobs:
+        build_cmd += ["--parallel", str(os.cpu_count() or 1)]
+    result = subprocess.run(
+        build_cmd, cwd=str(cmake_build_dir), env=build_env,
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        output = (result.stdout + result.stderr).strip()
+        raise RuntimeError(f"CMake build failed:\n\n{output[-3000:]}")
+
+    # If the game specifies a launch_subdir the binary stays where cmake put it
+    # (the launch dir is already correct relative to its resources).
+    # Otherwise move the binary up to dest so launch_game can find it.
+    if not game.get("launch_subdir"):
+        binary_name = build.get("cmake_binary", game.get("folder", "").lower())
+        moved = False
+        for candidate in [
+            cmake_build_dir / binary_name,
+            cmake_build_dir / f"{binary_name}.app",
+            cmake_build_dir / "Release" / binary_name,
+            cmake_build_dir / "Release" / f"{binary_name}.app",
+            cmake_build_dir / "bin" / binary_name,
+            cmake_build_dir / "bin" / f"{binary_name}.app",
+        ]:
+            if candidate.exists():
+                target_path = dest / candidate.name
+                if target_path.exists():
+                    shutil.rmtree(target_path) if target_path.is_dir() else target_path.unlink()
+                shutil.move(str(candidate), dest)
+                moved = True
+                break
+        if not moved:
+            # Fallback: search for any executable in the build dir
+            for f in cmake_build_dir.rglob("*"):
+                if f.is_file() and (f.stat().st_mode & 0o111) and f.suffix not in {".cmake", ".h", ".cpp", ".c"}:
+                    target_path = dest / f.name
+                    if not target_path.exists():
+                        shutil.move(str(f), dest)
+                    break
+
+
 def _build_game(game: dict, dest: Path, progress_cb=None) -> None:
     """
     Run the build steps defined in game["build"]:
-        brew             (list[str])  — homebrew packages to install first
-        pip_requirements (str)        — path to requirements.txt relative to build_dir
-        make_target      (str)        — make target; defaults to the game folder name
-        make_jobs        (bool)       — pass -j{cpu_count}; default True
-        make_cflags      (str)        — extra CFLAGS passed to make
+        brew                (list[str])  — homebrew packages to install first
+        pip_requirements    (str)        — path to requirements.txt relative to build_dir
+        cmake               (bool)       — use cmake instead of make
+        cmake_source_subdir (str)        — subdir containing CMakeLists.txt (default ".")
+        cmake_use_gcc       (bool)       — configure cmake to use Homebrew GCC
+        cmake_args          (list[str])  — extra args for cmake configure step
+        cmake_binary        (str)        — name of produced binary to move to dest
+        make_target         (str)        — make target; defaults to the game folder name
+        make_jobs           (bool)       — pass -j{cpu_count}; default True
+        make_cflags         (str)        — extra CFLAGS passed to make
     """
     build = game.get("build", {})
 
     def _cb(pct):
         if progress_cb:
             progress_cb(pct)
-
-    # Locate the directory that actually contains the Makefile
-    build_dir = _find_makefile_dir(dest)
 
     # Build a PATH that includes Homebrew regardless of how the app was launched
     # (.app bundles don't always inherit the user's shell PATH).
@@ -317,6 +473,25 @@ def _build_game(game: dict, dest: Path, progress_cb=None) -> None:
             )
         _cb(82)
         subprocess.run(["brew", "install"] + brew_pkgs, check=False, env=build_env)
+
+    # ── cmake path ──────────────────────────────────────────────────────────────
+    if build.get("cmake"):
+        # pip requirements (relative to dest) if any
+        pip_req = build.get("pip_requirements")
+        if pip_req:
+            _cb(86)
+            subprocess.run(
+                ["pip3", "install", "--break-system-packages", "-r", pip_req],
+                cwd=str(dest), check=False, env=build_env,
+            )
+        _build_cmake(game, build, dest, build_env, _cb)
+        _cb(99)
+        return
+
+    # ── make path ───────────────────────────────────────────────────────────────
+
+    # Locate the directory that actually contains the Makefile
+    build_dir = _find_makefile_dir(dest)
 
     # 2. pip requirements (relative to build_dir)
     pip_req = build.get("pip_requirements")
@@ -368,7 +543,43 @@ def _build_game(game: dict, dest: Path, progress_cb=None) -> None:
                 shutil.move(str(candidate), dest)
                 break
 
+    _cleanup_build_artifacts(game, dest)
     _cb(99)
+
+
+def _cleanup_build_artifacts(game: dict, dest: Path) -> None:
+    """
+    Remove source files from dest after a successful build.
+
+    For games with ``launch_subdir``: only that subdirectory is kept —
+    everything else (source tree, intermediate object files, etc.) is deleted.
+
+    For plain make builds: subdirectories that look like source trees
+    (contain a Makefile, CMakeLists.txt, src/, or .git/) are removed.
+    """
+    launch_subdir = game.get("launch_subdir")
+    if launch_subdir:
+        run_dir = dest / launch_subdir
+        if not run_dir.exists():
+            return
+        # Stash the run dir next to dest (same filesystem — no copy needed),
+        # wipe dest, then restore the run dir at its original relative path.
+        hold = dest.parent / f".gpi_keep_{dest.name}"
+        try:
+            shutil.move(str(run_dir), str(hold))
+            for item in list(dest.iterdir()):
+                shutil.rmtree(item) if item.is_dir() else item.unlink()
+            run_dir.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(hold), str(run_dir))
+        finally:
+            if hold.exists():
+                shutil.rmtree(hold, ignore_errors=True)
+    else:
+        # Make builds: remove subdirs that contain obvious source markers.
+        _SOURCE_MARKERS = {"Makefile", "CMakeLists.txt", "src", "include", ".git"}
+        for item in list(dest.iterdir()):
+            if item.is_dir() and any((item / m).exists() for m in _SOURCE_MARKERS):
+                shutil.rmtree(item)
 
 
 # ── High-level install ────────────────────────────────────────────────────────
@@ -483,13 +694,16 @@ def launch_game(game: dict, os_name: str) -> subprocess.Popen:
     For bare binaries we spawn directly so we can track the process properly.
     """
     d = game_dir(game, os_name)
-    kind, target = _find_launchable(d)
+    launch_subdir = game.get("launch_subdir")
+    run_dir = d / launch_subdir if launch_subdir else d
+    kind, target = _find_launchable(run_dir)
     if kind is None:
-        raise FileNotFoundError(f"No launchable found in {d}")
+        raise FileNotFoundError(f"No launchable found in {run_dir}")
+    extra_args = game.get("launch_args", [])
     if kind == "app":
-        return subprocess.Popen(["open", str(target)])
+        return subprocess.Popen(["open", str(target)] + extra_args)
     else:
-        return subprocess.Popen([str(target)], cwd=str(d))
+        return subprocess.Popen([str(target)] + extra_args, cwd=str(run_dir))
 
 
 # ── Finder ────────────────────────────────────────────────────────────────────

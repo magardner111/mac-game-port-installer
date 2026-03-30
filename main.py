@@ -8,6 +8,8 @@ import hashlib
 import shutil
 import subprocess
 import sys
+import tempfile
+import zipfile
 from collections import defaultdict
 from pathlib import Path
 
@@ -93,6 +95,96 @@ class AllReleasesWorker(QObject):
         self.finished.emit()
 
 
+# ── Archive / ROM helpers ──────────────────────────────────────────────────────
+
+_ARCHIVE_EXTS = {".zip", ".7z", ".rar"}
+_COMMON_ROM_EXTS = {".z64", ".n64", ".v64", ".sfc", ".smc", ".gba", ".gb", ".gbc", ".nes",
+                    ".iso", ".bin", ".rom", ".nds", ".gbs"}
+
+
+def _extract_archive_to_dir(archive_path: str) -> Path:
+    """Extract *archive_path* to a fresh temp directory and return its Path.
+
+    Caller is responsible for deleting the directory when finished.
+    Raises RuntimeError with a user-readable message on failure.
+    """
+    suffix = Path(archive_path).suffix.lower()
+    tmp    = Path(tempfile.mkdtemp(prefix="gpi_arc_"))
+    try:
+        if suffix == ".zip":
+            with zipfile.ZipFile(archive_path) as z:
+                z.extractall(tmp)
+
+        elif suffix == ".7z":
+            try:
+                import py7zr  # noqa: PLC0415
+            except ImportError:
+                raise RuntimeError(
+                    "py7zr is required to open .7z archives.\n"
+                    "Install it with:  pip install py7zr"
+                )
+            with py7zr.SevenZipFile(archive_path, mode="r") as z:
+                z.extractall(tmp)
+
+        elif suffix == ".rar":
+            rar_tool = shutil.which("unar") or shutil.which("unrar")
+            if not rar_tool:
+                raise RuntimeError(
+                    "No RAR extraction tool found.\n"
+                    "Install one with:  brew install unar"
+                )
+            if Path(rar_tool).name == "unar":
+                cmd = [rar_tool, archive_path, "-o", str(tmp), "-force-overwrite"]
+            else:
+                cmd = [rar_tool, "x", "-o+", archive_path, str(tmp) + "/"]
+            result = subprocess.run(cmd, capture_output=True)
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"RAR extraction failed:\n{result.stderr.decode(errors='replace')}"
+                )
+
+        else:
+            raise RuntimeError(f"Unsupported archive format: {suffix}")
+
+    except RuntimeError:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
+    except Exception as exc:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise RuntimeError(f"Could not extract archive:\n{exc}") from exc
+
+    return tmp
+
+
+def _extract_rom_from_archive(archive_path: str, expected_rom_name: str) -> tuple[str, str]:
+    """Extract *archive_path* and return (best_rom_path, tmp_dir).
+
+    Searches the extracted contents for a file whose extension matches
+    *expected_rom_name*.  Falls back to any known ROM extension, then picks
+    the largest file among multiple candidates.  Caller is responsible for
+    deleting *tmp_dir* when finished.
+
+    Raises RuntimeError with a user-readable message on failure.
+    """
+    tmp = _extract_archive_to_dir(archive_path)
+
+    expected_ext = Path(expected_rom_name).suffix.lower()
+    candidates: list[Path] = list(tmp.rglob(f"*{expected_ext}"))
+    if not candidates:
+        for ext in _COMMON_ROM_EXTS - {expected_ext}:
+            candidates.extend(tmp.rglob(f"*{ext}"))
+
+    if not candidates:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise RuntimeError(
+            f"No ROM file found inside the archive.\n"
+            f"Expected a {expected_ext.lstrip('.')} file."
+        )
+
+    # Pick the largest file — ROMs are almost always the biggest entry in an archive
+    return str(max(candidates, key=lambda p: p.stat().st_size)), str(tmp)
+
+
 # ── Game dialog ────────────────────────────────────────────────────────────────
 
 class GameDialog(QDialog):
@@ -110,7 +202,6 @@ class GameDialog(QDialog):
 
         self.setWindowTitle(game["name"])
         self.setMinimumWidth(540)
-        self.setModal(True)
         self._build_ui()
         self._load_release()
 
@@ -374,59 +465,222 @@ class GameDialog(QDialog):
 
     def _do_run(self):
         game_path = installer.game_dir(self.game, "macOS")
+
+        # Drop portable.txt before anything else so the game stores config/ROM
+        # in the game folder rather than ~/Library/Application Support
+        portable_file = self.game.get("portable_file")
+        if portable_file:
+            pf = game_path / portable_file
+            if not pf.exists():
+                pf.touch()
+
+        # ── Multi-disc games (e.g. PS1 titles) ───────────────────────────────
+        requires_discs = self.game.get("requires_discs", 0)
+        if requires_discs:
+            disc_subdir = self.game.get("disc_dest_subdir", "isos")
+            disc_dir    = game_path / disc_subdir
+            disc_dir.mkdir(parents=True, exist_ok=True)
+            _DISC_EXTS  = {".iso", ".bin", ".img"}
+
+            def _count_discs():
+                return sum(1 for f in disc_dir.iterdir() if f.suffix.lower() in _DISC_EXTS)
+
+            if _count_discs() < requires_discs:
+                found = _count_discs()
+                QMessageBox.information(
+                    self, "Disc Images Required",
+                    f"{self.game['name']} requires {requires_discs} disc images "
+                    f"({'ISO or BIN' }).\n"
+                    + (f"Found {found} already in the isos/ folder.\n\n" if found else "\n")
+                    + "Select all disc image files (or archives containing them) "
+                    "in the next dialog — you can pick multiple files at once.\n\n"
+                    "The game auto-detects which disc is which.",
+                )
+
+                while _count_discs() < requires_discs:
+                    paths, _ = QFileDialog.getOpenFileNames(
+                        self,
+                        f"{self.game['name']} — Select Disc Images "
+                        f"({_count_discs()}/{requires_discs} found)",
+                        str(Path.home()),
+                        "Disc Images & Archives (*.iso *.bin *.img *.zip *.7z *.rar);;"
+                        "All files (*)",
+                    )
+                    if not paths:
+                        return
+
+                    tmp_dirs: list[str] = []
+                    try:
+                        self.progress_label.setText("Copying disc images…")
+                        QApplication.processEvents()
+
+                        for path in paths:
+                            if Path(path).suffix.lower() in _ARCHIVE_EXTS:
+                                self.progress_label.setText("Extracting archive…")
+                                QApplication.processEvents()
+                                tmp = _extract_archive_to_dir(path)
+                                tmp_dirs.append(str(tmp))
+                                for disc_file in tmp.rglob("*"):
+                                    if disc_file.is_file() and disc_file.suffix.lower() in _DISC_EXTS:
+                                        shutil.copy2(disc_file, disc_dir / disc_file.name)
+                            else:
+                                shutil.copy2(path, disc_dir / Path(path).name)
+
+                    except Exception as exc:
+                        import traceback
+                        self.progress_label.setText("")
+                        QMessageBox.critical(self, "Disc Copy Error",
+                                             f"{exc}\n\n{traceback.format_exc()}")
+                        continue
+                    finally:
+                        for td in tmp_dirs:
+                            shutil.rmtree(td, ignore_errors=True)
+                        self.progress_label.setText("")
+
+                    if _count_discs() < requires_discs:
+                        btn = QMessageBox.warning(
+                            self, "Not Enough Discs",
+                            f"Only {_count_discs()} of {requires_discs} disc images found.\n\n"
+                            "Would you like to select more files?",
+                            QMessageBox.Yes | QMessageBox.No,
+                        )
+                        if btn != QMessageBox.Yes:
+                            return
+
         rom_name  = self.game.get("requires_rom")
 
         if rom_name:
-            rom_dest      = game_path / rom_name
-            expected_sha  = self.game.get("rom_checksum", "")
+            rom_subdir    = self.game.get("rom_dest_subdir")
+            rom_dest      = game_path / rom_subdir / rom_name if rom_subdir else game_path / rom_name
+            # Support single checksum (rom_checksum) or multiple (rom_checksums)
+            _ck_type      = self.game.get("rom_checksum_type", "sha256").lower()
+            _single       = self.game.get("rom_checksum", "")
+            valid_hashes  = [h.lower() for h in self.game.get("rom_checksums", [_single] if _single else [])]
             assets_marker = self.game.get("assets_marker")   # file that proves extraction is done
             assets_done   = (game_path / assets_marker).exists() if assets_marker else False
 
             # ── 1. Make sure we have the correct ROM on disk ──────────────────
-            def _sha256(p):
-                h = hashlib.sha256()
+            def _digest(p):
+                if _ck_type == "xxh3_64":
+                    try:
+                        import xxhash  # noqa: PLC0415
+                    except ImportError:
+                        raise RuntimeError(
+                            "xxhash is required to verify this ROM.\n"
+                            "Install it with:  pip install xxhash"
+                        )
+                    h = xxhash.xxh3_64()
+                else:
+                    h = hashlib.new(_ck_type)
                 with open(p, "rb") as f:
                     for chunk in iter(lambda: f.read(1 << 20), b""):
                         h.update(chunk)
                 return h.hexdigest()
 
             rom_ok = rom_dest.exists() and (
-                not expected_sha or _sha256(rom_dest).lower() == expected_sha.lower()
+                not valid_hashes or _digest(rom_dest).lower() in valid_hashes
             )
 
             if not rom_ok:
-                QMessageBox.information(
-                    self,
-                    "ROM Required",
+                requires_extraction = self.game.get("requires_asset_extraction")
+                msg = (
                     f"{self.game['name']} requires an original ROM to extract game assets.\n\n"
-                    f"Please locate your copy of {rom_name} in the next dialog.",
+                    f"Please locate your copy of {rom_name} in the next dialog."
+                    if requires_extraction else
+                    f"{self.game['name']} requires an original ROM file ({rom_name}) to run.\n\n"
+                    f"Please locate your copy in the next dialog."
                 )
-                path, _ = QFileDialog.getOpenFileName(
-                    self,
-                    f"{self.game['name']} — Locate ROM ({rom_name})",
-                    str(Path.home()),
-                    "All files (*)",
+                QMessageBox.information(self, "ROM Required", msg)
+                rom_ext   = Path(rom_name).suffix          # e.g. ".z64"
+                file_filter = (
+                    f"ROM & Archives (*{rom_ext} *.zip *.7z *.rar);;"
+                    f"All files (*)"
                 )
-                if not path:
-                    return
-
-                # Validate checksum
-                if expected_sha:
-                    self.progress_label.setText("Verifying ROM…")
-                    QApplication.processEvents()
-                    actual = _sha256(path)
-                    self.progress_label.setText("")
-                    if actual.lower() != expected_sha.lower():
-                        QMessageBox.critical(
-                            self, "Wrong ROM",
-                            f"Checksum mismatch — this doesn't appear to be the correct ROM.\n\n"
-                            f"Expected: {expected_sha}\nGot:      {actual}",
-                        )
+                while True:
+                    path, _ = QFileDialog.getOpenFileName(
+                        self,
+                        f"{self.game['name']} — Locate ROM ({rom_name})",
+                        str(Path.home()),
+                        file_filter,
+                    )
+                    if not path:
                         return
 
-                shutil.copy2(path, rom_dest)
-                rom_ok = True
-                assets_done = False   # force re-extraction with new ROM
+                    tmp_dir = None
+                    try:
+                        # ── Decompress archive if needed ──────────────────────
+                        if Path(path).suffix.lower() in _ARCHIVE_EXTS:
+                            self.progress_label.setText("Extracting archive…")
+                            QApplication.processEvents()
+                            path, tmp_dir = _extract_rom_from_archive(path, rom_name)
+
+                        # ── Validate magic bytes ──────────────────────────────
+                        magic_spec = self.game.get("rom_validation_magic")
+                        if magic_spec:
+                            offset   = magic_spec.get("offset", 0)
+                            expected = bytes.fromhex(magic_spec["hex"])
+                            with open(path, "rb") as _f:
+                                _f.seek(offset)
+                                actual_bytes = _f.read(len(expected))
+                            if actual_bytes != expected:
+                                if tmp_dir:
+                                    shutil.rmtree(tmp_dir, ignore_errors=True)
+                                    tmp_dir = None
+                                desc = self.game.get("rom_description", rom_name)
+                                btn = QMessageBox.warning(
+                                    self, "Wrong File",
+                                    f"This doesn't look like the right disc image.\n\n"
+                                    f"Expected:  {desc}\n\n"
+                                    f"Would you like to select a different file?",
+                                    QMessageBox.Yes | QMessageBox.No,
+                                )
+                                if btn == QMessageBox.Yes:
+                                    continue
+                                return
+
+                        # ── Validate checksum ─────────────────────────────────
+                        if valid_hashes:
+                            self.progress_label.setText("Verifying ROM…")
+                            QApplication.processEvents()
+                            actual = _digest(path)
+                            self.progress_label.setText("")
+                            if actual.lower() not in valid_hashes:
+                                if tmp_dir:
+                                    shutil.rmtree(tmp_dir, ignore_errors=True)
+                                    tmp_dir = None
+                                expected_str = "\n".join(valid_hashes)
+                                btn = QMessageBox.warning(
+                                    self, "Wrong ROM",
+                                    f"This doesn't appear to be a supported version of the ROM.\n\n"
+                                    f"Accepted {_ck_type.upper()} checksum(s):\n{expected_str}\n\n"
+                                    f"Got:\n{actual}\n\n"
+                                    f"Would you like to select a different file?",
+                                    QMessageBox.Yes | QMessageBox.No,
+                                )
+                                if btn == QMessageBox.Yes:
+                                    continue
+                                return
+
+                        # ── Copy ROM to destination ───────────────────────────
+                        rom_dest.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(path, rom_dest)
+                        rom_ok = True
+                        assets_done = False   # force re-extraction with new ROM
+
+                    except Exception as exc:
+                        import traceback
+                        self.progress_label.setText("")
+                        QMessageBox.critical(
+                            self, "ROM Error",
+                            f"{exc}\n\n{traceback.format_exc()}",
+                        )
+                        continue
+                    finally:
+                        if tmp_dir:
+                            shutil.rmtree(tmp_dir, ignore_errors=True)
+                        self.progress_label.setText("")
+
+                    break
 
             # ── 2. Run asset extraction if needed ─────────────────────────────
             if rom_ok and not assets_done and self.game.get("requires_asset_extraction"):
@@ -485,11 +739,17 @@ class GameDialog(QDialog):
         installer.reveal_in_finder(installer.game_dir(self.game, "macOS"))
 
     def _do_configure(self):
-        import importlib
-        folder = self.game["folder"].lower()
-        mod = importlib.import_module(f"configs.{folder}")
-        self._config_win = mod.ConfigWindow()
-        self._config_win.show()
+        import importlib, traceback
+        try:
+            folder = self.game["folder"].lower()
+            mod = importlib.import_module(f"configs.{folder}")
+            self._config_win = mod.ConfigWindow()
+            self._config_win.show()
+            self._config_win.raise_()
+            self._config_win.activateWindow()
+        except Exception as exc:
+            QMessageBox.critical(self, "Config Error",
+                                 f"{exc}\n\n{traceback.format_exc()}")
 
 
 # ── Background image filter ────────────────────────────────────────────────────
@@ -756,8 +1016,13 @@ class MainWindow(QMainWindow):
         type_filt = self.type_combo.currentText()
 
         # Build console → game_title → [games] hierarchy
+        # Only show games with a macOS binary or a build-from-source config
+        mac_games = [
+            g for g in GAMES
+            if "macOS" in g.get("platforms", []) or g.get("build")
+        ]
         console_groups: dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))
-        for game in sorted(GAMES, key=lambda g: g["name"]):
+        for game in sorted(mac_games, key=lambda g: g["name"]):
             console = game.get("console", "Other")
             title   = game.get("game_title", "Unknown")
             console_groups[console][title].append(game)
@@ -881,9 +1146,15 @@ class MainWindow(QMainWindow):
         menu.exec(self.tree.viewport().mapToGlobal(pos))
 
     def _open_dialog(self, game: dict):
+        # Close any existing game dialog before opening a new one
+        if hasattr(self, "_game_dlg") and self._game_dlg:
+            self._game_dlg.close()
         dlg = GameDialog(self, game)
         dlg.status_changed.connect(self._update_game_row)
-        dlg.exec()
+        self._game_dlg = dlg
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────

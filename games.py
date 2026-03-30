@@ -1,6 +1,6 @@
 GAMES = [
     {
-        "name": "Zelda 64: Recompiled",
+        "name": "*** Zelda 64: Recompiled",
         "game_title": "The Legend of Zelda: Majora's Mask",
         "console": "Nintendo 64",
         "repo": "Zelda64Recomp/Zelda64Recomp",
@@ -8,6 +8,10 @@ GAMES = [
         "type": "Recomp",
         "platforms": ["macOS", "Windows", "Linux"],
         "icon_url": "https://raw.githubusercontent.com/Zelda64Recomp/Zelda64Recomp/refs/heads/dev/icons/512.png",
+        "portable_file": "portable.txt",
+        "requires_rom": "mm.n64.us.1.0.z64",
+        "rom_checksum_type": "xxh3_64",
+        "rom_checksums": ["ef18b4a9e2386169"],  # US 1.0
     },
     {
         "name": "Goemon 64: Recompiled",
@@ -18,6 +22,10 @@ GAMES = [
         "type": "Recomp",
         "platforms": ["macOS", "Windows", "Linux"],
         "icon_url": "https://raw.githubusercontent.com/klorfmorf/Goemon64Recomp/refs/heads/dev/icons/512.png",
+        "portable_file": "portable.txt",
+        "requires_rom": "mnsg.us.z64",
+        "rom_checksum_type": "xxh3_64",
+        "rom_checksums": ["db1bc7ee0e6beba1"],  # US version
     },
     {
         "name": "Mario Kart 64: Recompiled",
@@ -28,6 +36,10 @@ GAMES = [
         "type": "Recomp",
         "platforms": ["macOS", "Windows", "Linux"],
         "icon_url": "https://raw.githubusercontent.com/sonicdcer/MarioKart64Recomp/refs/heads/main/icons/512.png",
+        "portable_file": "portable.txt",
+        "requires_rom": "mk64.us.z64",
+        "rom_checksum_type": "xxh3_64",
+        "rom_checksums": ["54572403569b87c1"],  # US
     },
     {
         "name": "Duke Nukem: Zero Hour Recompiled",
@@ -38,6 +50,10 @@ GAMES = [
         "type": "Recomp",
         "platforms": ["macOS", "Windows", "Linux"],
         "icon_url": "https://raw.githubusercontent.com/sonicdcer/DNZHRecomp/refs/heads/main/icons/512.png",
+        "portable_file": "portable.txt",
+        "requires_rom": "dnzh.us.z64",
+        "rom_checksum_type": "xxh3_64",
+        "rom_checksums": ["afc33da7101fec88"],  # US
     },
     {
         "name": "Star Fox 64: Recompiled",
@@ -48,6 +64,45 @@ GAMES = [
         "type": "Recomp",
         "platforms": ["macOS", "Windows", "Linux"],
         "icon_url": "https://raw.githubusercontent.com/sonicdcer/Starfox64Recomp/refs/heads/main/icons/512.png",
+        "portable_file": "portable.txt",
+        "requires_rom": "sf64.n64.us.1.1.z64",
+        "rom_checksum_type": "xxh3_64",
+        "rom_checksums": ["163fd3fc3813f54e"],  # US 1.1 / Rev A
+    },
+    {
+        "name": "Quest 64: Recompiled",
+        "game_title": "Quest 64",
+        "console": "Nintendo 64",
+        "repo": "Rainchus/Quest64-Recomp",
+        "folder": "Quest64Recompiled",
+        "type": "Recomp",
+        "platforms": ["Windows", "Linux"],  # macOS CI builds work, official release coming soon
+        "icon_url": None,
+        "portable_file": "portable.txt",
+    },
+    {
+        "name": "Smash 64: Recompiled",
+        "game_title": "Super Smash Bros.",
+        "console": "Nintendo 64",
+        "repo": "zestydevy/smash64r",
+        "folder": "Smash64Recompiled",
+        "type": "Recomp",
+        "platforms": ["Windows", "Linux"],  # macOS support in progress
+        "icon_url": None,
+        "portable_file": "portable.txt",
+        "requires_rom": "smashbrothers.us.z64",
+        "rom_checksum_type": "xxh3_64",
+        "rom_checksums": ["38912ac86097bfec"],  # US
+    },
+    {
+        "name": "Starship",
+        "game_title": "Star Fox 64",
+        "console": "Nintendo 64",
+        "repo": "HarbourMasters/Starship",
+        "folder": "Starship",
+        "type": "Decomp",
+        "platforms": ["macOS", "Windows", "Linux"],
+        "icon_url": None,
     },
     {
         "name": "Banjo-Kazooie: Recompiled",
@@ -58,6 +113,10 @@ GAMES = [
         "type": "Recomp",
         "platforms": ["macOS", "Windows", "Linux"],
         "icon_url": "https://raw.githubusercontent.com/BanjoRecomp/BanjoRecomp/refs/heads/main/icons/app.png",
+        "portable_file": "portable.txt",
+        "requires_rom": "bk.n64.us.1.0.z64",
+        "rom_checksum_type": "xxh3_64",
+        "rom_checksums": ["1b67585d56e07f8c"],  # US 1.0
     },
     {
         "name": "Bomberman 64: Recompiled",
@@ -68,6 +127,10 @@ GAMES = [
         "type": "Recomp",
         "platforms": ["macOS", "Windows", "Linux"],
         "icon_url": "https://raw.githubusercontent.com/RevoSucks/BM64Recomp/refs/heads/master/icons/512.png",
+        "portable_file": "portable.txt",
+        "requires_rom": "bm64_us.z64",
+        "rom_checksum_type": "xxh3_64",
+        "rom_checksums": ["c4c0b74bbb696426"],  # US
     },
     {
         "name": "Space Station Silicon Valley: Recompiled",
@@ -78,6 +141,10 @@ GAMES = [
         "type": "Recomp",
         "platforms": ["macOS", "Windows", "Linux"],
         "icon_url": "https://raw.githubusercontent.com/Cellenseres/SSSV_Recomp/refs/heads/main/icons/512.png",
+        "portable_file": "portable.txt",
+        "requires_rom": "sssv.n64.us.1.0.z64",
+        "rom_checksum_type": "xxh3_64",
+        "rom_checksums": ["912a068aadb0d0c5"],  # US 1.0
     },
     {
         "name": "Ship of Harkinian",
@@ -90,7 +157,7 @@ GAMES = [
         "icon_url": None,
     },
     {
-        "name": "SpaghettiKart",
+        "name": "*** SpaghettiKart",
         "game_title": "Mario Kart 64",
         "console": "Nintendo 64",
         "repo": "harbourmasters/spaghettikart",
@@ -128,6 +195,15 @@ GAMES = [
         "type": "Decomp",
         "platforms": ["macOS", "Windows", "Linux"],
         "icon_url": None,
+        "has_config": True,
+        "launch_args": ["--portable"],
+        "requires_rom": "pd.ntsc-final.z64",
+        "rom_dest_subdir": "data",
+        "rom_checksum_type": "md5",
+        "rom_checksums": [
+            "e03b088b6ac9e0080440efed07c1e40f",  # US V1.1 / ntsc-final (recommended)
+            "7f4171b0c8d17815be37913f535e4e93",  # US V1.0 / ntsc-1.0
+        ],
     },
     {
         "name": "SM64 Co-op Deluxe",
@@ -138,6 +214,50 @@ GAMES = [
         "type": "Decomp",
         "platforms": ["macOS", "Windows", "Linux"],
         "icon_url": None,
+    },
+    {
+        "name": "Super Mario World",
+        "game_title": "Super Mario World",
+        "console": "Super Nintendo",
+        "repo": "snesrev/smw",
+        "scraper": "github_source",
+        "source_ref": "main",
+        "folder": "SuperMarioWorld",
+        "has_config": True,
+        "type": "Reimpl",
+        "platforms": ["macOS", "Linux"],
+        "icon_url": None,
+        "requires_rom": "smw.sfc",
+        "rom_checksum": "0838e531fe22c077528febe14cb3ff7c492f1f5fa8de354192bdff7137c27f5b",
+        "requires_asset_extraction": True,
+        "assets_marker": "smw_assets.dat",
+        "build": {
+            "brew": ["sdl2"],
+            "make_target": "smw",
+            "make_jobs": True,
+            "make_cflags": "-O2 -fno-strict-aliasing",  # strip upstream -Werror
+        },
+    },
+    {
+        "name": "Super Metroid",
+        "game_title": "Super Metroid",
+        "console": "Super Nintendo",
+        "repo": "snesrev/sm",
+        "scraper": "github_source",
+        "source_ref": "main",
+        "folder": "SuperMetroid",
+        "has_config": True,
+        "type": "Reimpl",
+        "platforms": ["macOS", "Linux"],
+        "icon_url": None,
+        "requires_rom": "sm.smc",
+        "rom_checksum": "12b77c4bc9c1832cee8881244659065ee1d84c70c3d29e6eaf92e6798cc2ca72",
+        "build": {
+            "brew": ["sdl2"],
+            "make_target": "sm",
+            "make_jobs": True,
+            "make_cflags": "-O2 -fno-strict-aliasing",  # strip upstream -Werror
+        },
     },
     {
         "name": "Zelda: A Link to the Past",
@@ -172,6 +292,8 @@ GAMES = [
         "type": "Decomp",
         "platforms": ["macOS", "Windows", "Linux"],
         "icon_url": None,
+        "requires_discs": 4,
+        "disc_dest_subdir": "isos",
     },
     {
         "name": "Project R",
@@ -194,5 +316,39 @@ GAMES = [
         "type": "Decomp",
         "platforms": ["macOS", "Windows", "Linux"],
         "icon_url": None,
+    },
+    {
+        "name": "Animal Crossing",
+        "game_title": "Animal Crossing",
+        "console": "GameCube",
+        # Primary repo — use once GL_SILENCE_DEPRECATION appears in pc/CMakeLists.txt
+        "repo": "flyngmt/ACGC-PC-Port",
+        "scraper": "github_source",
+        "source_ref": "main",
+        # Until that merge lands, use the working macOS PR fork instead
+        "source_ref_pr_fallback": {
+            "repo": "birabittoh/ACGC-PC-Port",
+            "ref": "master",
+            "check_url": "https://raw.githubusercontent.com/flyngmt/ACGC-PC-Port/main/pc/CMakeLists.txt",
+            "check_pattern": "GL_SILENCE_DEPRECATION",
+        },
+        "folder": "AnimalCrossing",
+        "type": "Decomp",
+        "platforms": ["macOS"],
+        "icon_url": None,
+        "has_config": True,
+        "requires_rom": "animal_crossing.iso",
+        "rom_dest_subdir": "pc/build/bin/rom",
+        "rom_description": "Animal Crossing (USA, GAFE01) GameCube disc image (.iso / .gcm)",
+        "rom_validation_magic": {"offset": 0x1C, "hex": "c2339f3d"},  # GCN disc magic
+        "launch_subdir": "pc/build/bin",
+        "build": {
+            "brew": ["gcc", "ninja", "sdl2"],
+            "cmake": True,
+            "cmake_source_subdir": "pc",
+            "cmake_use_gcc": True,
+            "cmake_binary": "ACGCPC",
+            "make_jobs": True,
+        },
     },
 ]
