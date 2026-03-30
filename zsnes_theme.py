@@ -1283,16 +1283,19 @@ class BloodRippleOverlay(QWidget):
                 d["vx"] *= -0.5
                 d["ax"] *= -1
 
-            if d["y"] >= h - 4:
-                ix, iy = d["x"], float(h - 4)
-                if d.get("is_gush") and self._gush_splash_pending:
-                    # First gush drop to land — play splash once
+            # Pre-trigger sound ~3 frames before landing to compensate for audio latency
+            if not d.get("sound_queued") and len(d["trail"]) >= 5:
+                if not d.get("is_gush") and d["y"] >= h - max(20, d["vy"] * 3):
+                    d["sound_queued"] = True
+                    self._play_drip_sound()
+                elif d.get("is_gush") and self._gush_splash_pending and d["y"] >= h - max(20, d["vy"] * 3):
+                    d["sound_queued"] = True
                     self._gush_splash_pending = False
                     if self._splash_fx:
                         self._splash_fx.play()
-                elif not d.get("is_gush") and len(d["trail"]) >= 5:
-                    # Only play if the drop actually fell a visible distance
-                    self._play_drip_sound()
+
+            if d["y"] >= h - 4:
+                ix, iy = d["x"], float(h - 4)
                 # Single impact ring at landing point
                 self._rings.append({
                     "x": ix, "y": iy, "r": 2.0, "alpha": 230,
