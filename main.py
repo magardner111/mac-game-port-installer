@@ -28,6 +28,11 @@ import installer
 import settings as app_settings
 from games import GAMES
 
+try:
+    import zsnes_theme as zsnes_theme
+except ImportError:
+    zsnes_theme = None
+
 # ── Constants ──────────────────────────────────────────────────────────────────
 
 STATUS_NOT_INSTALLED = "—  Not Installed"
@@ -224,11 +229,11 @@ class GameDialog(QDialog):
 
         repo = self.game.get("repo")
         repo_label = QLabel(f"github.com/{repo}" if repo else self.game.get("scraper_url", ""))
-        repo_label.setStyleSheet("color: #555;")
+        repo_label.setStyleSheet("color: #a0a0c0;")
         root.addWidget(repo_label)
 
         line = QWidget(); line.setFixedHeight(1)
-        line.setStyleSheet("background: #ccc;")
+        line.setStyleSheet("background: #4040b0;")
         root.addWidget(line)
 
         # Info form
@@ -267,40 +272,36 @@ class GameDialog(QDialog):
         root.addWidget(self.progress_bar)
 
         self.progress_label = QLabel("")
-        self.progress_label.setStyleSheet("color: #555; font-size: 11px;")
+        self.progress_label.setStyleSheet("color: #a0a0c0;")
         root.addWidget(self.progress_label)
 
         # Buttons  (order: Run · Configure? · Install · Browse Folder · Uninstall · Close)
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
 
-        self.run_btn = QPushButton("Run")
+        self.run_btn = QPushButton("RUN")
         self.run_btn.setEnabled(False)
-        self.run_btn.setStyleSheet("QPushButton { background: #2d7a2d; color: white; }"
-                                   "QPushButton:hover { background: #3a9e3a; }"
-                                   "QPushButton:disabled { background: #1e4a1e; color: #666; }")
+        self.run_btn.setProperty("class", "primary")
         self.run_btn.clicked.connect(self._do_run)
 
-        self.config_btn = QPushButton("Configure")
+        self.config_btn = QPushButton("CONFIGURE")
         self.config_btn.setVisible(bool(self.game.get("has_config")))
         self.config_btn.clicked.connect(self._do_configure)
 
-        self.install_btn = QPushButton("Install")
+        self.install_btn = QPushButton("INSTALL")
         self.install_btn.setEnabled(False)
         self.install_btn.clicked.connect(self._do_install)
 
-        self.folder_btn = QPushButton("Browse Folder")
+        self.folder_btn = QPushButton("BROWSE FOLDER")
         self.folder_btn.setEnabled(False)
         self.folder_btn.clicked.connect(self._do_browse)
 
-        self.uninstall_btn = QPushButton("Uninstall")
+        self.uninstall_btn = QPushButton("UNINSTALL")
         self.uninstall_btn.setEnabled(False)
-        self.uninstall_btn.setStyleSheet("QPushButton { background: #7a2d2d; color: white; }"
-                                         "QPushButton:hover { background: #9e3a3a; }"
-                                         "QPushButton:disabled { background: #4a1e1e; color: #666; }")
+        self.uninstall_btn.setProperty("class", "danger")
         self.uninstall_btn.clicked.connect(self._do_uninstall)
 
-        close_btn = QPushButton("Close")
+        close_btn = QPushButton("CLOSE")
         close_btn.clicked.connect(self.accept)
 
         btn_row.addWidget(self.run_btn)
@@ -789,9 +790,10 @@ class _BgFilter(QObject):
             x = (vp.width()  - scaled.width())  // 2
             y = (vp.height() - scaled.height()) // 2
             p.drawPixmap(x, y, scaled)
-            bottom = self._items_bottom()
-            if bottom > 0:
-                p.fillRect(0, 0, vp.width(), bottom + 10, QColor(30, 30, 30, 180))
+            # Cover the entire viewport with a near-opaque navy tint so the
+            # image reads as a very subtle atmospheric backdrop rather than
+            # dominating the list (ZSNES theme: dark navy over full height).
+            p.fillRect(0, 0, vp.width(), vp.height(), QColor(20, 20, 90, 225))
             p.end()
         return False  # let Qt paint items on top
 
@@ -809,12 +811,28 @@ class MainWindow(QMainWindow):
         self._scan_thread = None
         self._scan_worker = None
         self._auto_update_threads: list[QThread] = []
+        self._snow:         object = None
+        self._fire:         object = None
+        self._blood:        object = None
+        self._cursor_anim:  object = None
 
         installer.GAMES_DIR.mkdir(parents=True, exist_ok=True)
         self._build_ui()
         self._build_menu()
         self._populate()
         self._start_release_scan()
+
+        # Restore effect preferences
+        if zsnes_theme and app_settings.get("snow_effect"):
+            self._toggle_snow(True)
+        if zsnes_theme and app_settings.get("fire_effect"):
+            self._toggle_fire(True)
+        if zsnes_theme and app_settings.get("nesticle_cursor"):
+            self._toggle_nesticle(True)
+            if app_settings.get("blood_trail"):
+                self._toggle_blood(True)
+        # Catch double-clicks on any child widget for the blood gush
+        QApplication.instance().installEventFilter(self)
 
     def _build_ui(self):
         central = QWidget()
@@ -827,24 +845,24 @@ class MainWindow(QMainWindow):
         toolbar = QHBoxLayout()
         toolbar.setSpacing(8)
 
-        toolbar.addWidget(QLabel("Filter:"))
+        toolbar.addWidget(QLabel("FILTER:"))
         self.filter_edit = QLineEdit()
-        self.filter_edit.setPlaceholderText("Search…")
+        self.filter_edit.setPlaceholderText("SEARCH...")
         self.filter_edit.setFixedWidth(160)
         self.filter_edit.textChanged.connect(self._apply_filter)
         self.filter_edit.installEventFilter(self)
         toolbar.addWidget(self.filter_edit)
 
         toolbar.addSpacing(12)
-        toolbar.addWidget(QLabel("Type:"))
+        toolbar.addWidget(QLabel("TYPE:"))
         self.type_combo = QComboBox()
-        self.type_combo.addItems(["All", "Recomp", "Decomp", "Reimpl", "Port"])
+        self.type_combo.addItems(["ALL", "RECOMP", "DECOMP", "REIMPL", "PORT"])
         self.type_combo.setFixedWidth(100)
         self.type_combo.currentTextChanged.connect(self._apply_filter)
         toolbar.addWidget(self.type_combo)
 
         toolbar.addSpacing(12)
-        self.auto_update_check = QCheckBox("Auto-update on launch")
+        self.auto_update_check = QCheckBox("AUTO-UPDATE ON LAUNCH")
         self.auto_update_check.setChecked(app_settings.get("auto_update"))
         self.auto_update_check.toggled.connect(lambda v: (
             app_settings.set_value("auto_update", v),
@@ -853,7 +871,7 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(self.auto_update_check)
 
         toolbar.addStretch()
-        refresh_btn = QPushButton("Refresh")
+        refresh_btn = QPushButton("REFRESH")
         refresh_btn.clicked.connect(self._start_release_scan)
         toolbar.addWidget(refresh_btn)
         layout.addLayout(toolbar)
@@ -861,7 +879,7 @@ class MainWindow(QMainWindow):
         # Tree
         self.tree = QTreeWidget()
         self.tree.setColumnCount(3)
-        self.tree.setHeaderLabels(["Port", "Type", "Version"])
+        self.tree.setHeaderLabels(["PORT", "TYPE", "VERSION"])
         self.tree.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.tree.setSelectionMode(QAbstractItemView.SingleSelection)
         self.tree.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -880,12 +898,14 @@ class MainWindow(QMainWindow):
             self._bg_filter = _BgFilter(_bg, self.tree)
             self.tree.viewport().installEventFilter(self._bg_filter)
 
+        if zsnes_theme:
+            self.tree.setItemDelegate(zsnes_theme.UpperCaseDelegate(self.tree))
         self.tree.itemDoubleClicked.connect(self._on_double_click)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._on_context_menu)
 
         layout.addWidget(self.tree)
-        self.statusBar().showMessage("Double-click a port to install or launch")
+        self.statusBar().showMessage("DOUBLE-CLICK A PORT TO INSTALL OR LAUNCH")
 
     def _build_menu(self):
         menubar = self.menuBar()
@@ -903,9 +923,110 @@ class MainWindow(QMainWindow):
 
         smenu.addSeparator()
 
+        if zsnes_theme:
+            self._snow_action = QAction("Snow Effect", self)
+            self._snow_action.setCheckable(True)
+            self._snow_action.setChecked(app_settings.get("snow_effect"))
+            self._snow_action.toggled.connect(self._toggle_snow)
+            smenu.addAction(self._snow_action)
+
+            self._fire_action = QAction("Fire Effect", self)
+            self._fire_action.setCheckable(True)
+            self._fire_action.setChecked(app_settings.get("fire_effect"))
+            self._fire_action.toggled.connect(self._toggle_fire)
+            smenu.addAction(self._fire_action)
+
+            self._nesticle_action = QAction("Nesticle Cursor", self)
+            self._nesticle_action.setCheckable(True)
+            self._nesticle_action.setChecked(app_settings.get("nesticle_cursor"))
+            self._nesticle_action.toggled.connect(self._toggle_nesticle)
+            smenu.addAction(self._nesticle_action)
+
+            # Blood Trail — hidden unless Nesticle Cursor is on
+            self._blood_action = QAction("    Blood Trail", self)
+            self._blood_action.setCheckable(True)
+            self._blood_action.setChecked(app_settings.get("blood_trail"))
+            self._blood_action.toggled.connect(self._toggle_blood)
+            self._blood_action.setVisible(app_settings.get("nesticle_cursor"))
+            smenu.addAction(self._blood_action)
+            smenu.addSeparator()
+
         token_action = QAction("Add GitHub Token…", self)
         token_action.triggered.connect(self._show_token_dialog)
         smenu.addAction(token_action)
+
+    def _toggle_snow(self, enabled: bool):
+        app_settings.set_value("snow_effect", enabled)
+        if not zsnes_theme:
+            return
+        if enabled:
+            if self._snow is None:
+                self._snow = zsnes_theme.SnowOverlay(self.centralWidget())
+            self._snow.resize(self.centralWidget().size())
+            self._snow.start()
+        else:
+            if self._snow is not None:
+                self._snow.stop()
+
+    def _toggle_fire(self, enabled: bool):
+        app_settings.set_value("fire_effect", enabled)
+        if not zsnes_theme:
+            return
+        if enabled:
+            if self._fire is None:
+                self._fire = zsnes_theme.FireOverlay(self.centralWidget())
+            self._fire.resize(self.centralWidget().size())
+            self._fire.start()
+        else:
+            if self._fire is not None:
+                self._fire.stop()
+
+    def _toggle_nesticle(self, enabled: bool):
+        app_settings.set_value("nesticle_cursor", enabled)
+        if not zsnes_theme:
+            return
+        if enabled:
+            if self._cursor_anim is None:
+                _cursor_dir = Path(__file__).parent / "assets" / "cursor_frames"
+                if _cursor_dir.exists():
+                    self._cursor_anim = zsnes_theme.CursorAnimator(
+                        _cursor_dir, parent=QApplication.instance()
+                    )
+            if self._cursor_anim:
+                self._cursor_anim.start()
+        else:
+            if self._cursor_anim:
+                self._cursor_anim.stop()
+            # Also disable blood trail when cursor is disabled
+            if self._blood is not None:
+                self._blood.stop()
+            app_settings.set_value("blood_trail", False)
+            self._blood_action.setChecked(False)
+        # Show / hide the Blood Trail sub-option
+        self._blood_action.setVisible(enabled)
+
+    def _toggle_blood(self, enabled: bool):
+        app_settings.set_value("blood_trail", enabled)
+        if not zsnes_theme:
+            return
+        if enabled:
+            if self._blood is None:
+                self._blood = zsnes_theme.BloodRippleOverlay(self.centralWidget())
+            self._blood.resize(self.centralWidget().size())
+            self._blood.start()
+        else:
+            if self._blood is not None:
+                self._blood.stop()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        cw = self.centralWidget()
+        if self._snow  is not None and self._snow.is_running():
+            self._snow.resize(cw.size())
+        if self._fire  is not None and self._fire.is_running():
+            self._fire.resize(cw.size())
+        if self._blood is not None and self._blood.is_running():
+            self._blood.resize(cw.size())
 
     def _show_token_dialog(self):
         dlg = QDialog(self)
@@ -927,8 +1048,8 @@ class MainWindow(QMainWindow):
 
         btn_row = QHBoxLayout()
         btn_row.addStretch()
-        save_btn = QPushButton("Save")
-        cancel_btn = QPushButton("Cancel")
+        save_btn = QPushButton("SAVE")
+        cancel_btn = QPushButton("CANCEL")
         save_btn.setDefault(True)
         save_btn.clicked.connect(lambda: (
             app_settings.set_value("github_token", token_edit.text().strip()),
@@ -948,14 +1069,14 @@ class MainWindow(QMainWindow):
             return
         self._scan_thread = None
         self._scan_worker = None
-        self.statusBar().showMessage("Checking for latest versions…")
+        self.statusBar().showMessage("CHECKING FOR LATEST VERSIONS...")
         thread = QThread(self)
         worker = AllReleasesWorker()
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.game_checked.connect(self._on_release_fetched)
         worker.finished.connect(thread.quit)
-        worker.finished.connect(lambda: self.statusBar().showMessage("Double-click a port to install or launch"))
+        worker.finished.connect(lambda: self.statusBar().showMessage("DOUBLE-CLICK A PORT TO INSTALL OR LAUNCH"))
         worker.finished.connect(lambda: setattr(self, '_scan_thread', None))
         self._scan_thread = thread
         self._scan_worker = worker
@@ -987,7 +1108,7 @@ class MainWindow(QMainWindow):
         asset = installer.pick_asset(release, "macOS", game)
         if not asset:
             return
-        self.statusBar().showMessage(f"Auto-updating {game['name']}…")
+        self.statusBar().showMessage(f"AUTO-UPDATING {game['name'].upper()}...")
         thread = QThread(self)
         worker = InstallWorker(game, release, asset)
         worker.moveToThread(thread)
@@ -999,6 +1120,12 @@ class MainWindow(QMainWindow):
         worker.error.connect(thread.quit)
         self._auto_update_threads.append(thread)
         thread.start()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Escape:
+            self.tree.collapseAll()
+        else:
+            super().keyPressEvent(event)
 
     def closeEvent(self, event):
         # Stop the background release scan
@@ -1065,7 +1192,7 @@ class MainWindow(QMainWindow):
                               and query not in title.lower() \
                               and query not in console.lower():
                         continue
-                    if type_filt != "All" and game.get("type") != type_filt:
+                    if type_filt != "ALL" and game.get("type", "").upper() != type_filt:
                         continue
                     visible.append(game)
 
@@ -1077,7 +1204,7 @@ class MainWindow(QMainWindow):
                     console_item = QTreeWidgetItem(self.tree)
                     console_item.setText(0, console)
                     console_item.setFont(0, bold_font)
-                    console_item.setFlags(Qt.ItemIsEnabled)
+                    console_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
                     console_item.setFirstColumnSpanned(True)
                     console_item.setExpanded(bool(query))
 
@@ -1085,7 +1212,7 @@ class MainWindow(QMainWindow):
                 title_item = QTreeWidgetItem(console_item)
                 title_item.setText(0, title)
                 title_item.setFont(0, bold_sm)
-                title_item.setFlags(Qt.ItemIsEnabled)
+                title_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
                 title_item.setFirstColumnSpanned(True)
                 title_item.setExpanded(bool(query))
 
@@ -1133,6 +1260,11 @@ class MainWindow(QMainWindow):
             if event.key() == Qt.Key_Escape:
                 self.filter_edit.clear()
                 return True
+        # Double-click anywhere → blood gush if effect is active
+        if (event.type() == QEvent.Type.MouseButtonDblClick
+                and self._blood is not None
+                and self._blood.is_running()):
+            self._blood.gush(event.globalPosition().toPoint())
         return super().eventFilter(obj, event)
 
     def _on_double_click(self, item: QTreeWidgetItem, column: int):
@@ -1200,7 +1332,13 @@ def _check_brew():
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    app.setStyle("macos")
+    if zsnes_theme:
+        zsnes_theme.load_pixel_font()
+        app.setStyle(zsnes_theme.UpperCaseStyle("Fusion"))
+        app.setFont(zsnes_theme.pixel_font(7))
+        app.setStyleSheet(zsnes_theme.stylesheet())
+        zsnes_theme.install_uppercase_filter(app)
+        pass  # cursor now managed by MainWindow via Nesticle Cursor setting
     icon_path = Path(__file__).parent / "assets" / "mgp-icon.png"
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
