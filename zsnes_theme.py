@@ -1199,25 +1199,13 @@ class BloodRippleOverlay(QWidget):
                 elif not d.get("is_gush") and len(d["trail"]) >= 5:
                     # Only play if the drop actually fell a visible distance
                     self._play_drip_sound()
-                # Impact ring
+                # Single impact ring at landing point
                 self._rings.append({
                     "x": ix, "y": iy, "r": 2.0, "alpha": 230,
                     "color": random.choice(self._RING_COLORS),
                     "speed": self._RING_SPEED, "max_r": self._RING_MAX_R,
+                    "ry_ratio": 1.0,
                 })
-                # Small scatter rings
-                for _ in range(random.randint(3, 5)):
-                    angle = random.uniform(0, math.pi * 2)
-                    dist  = random.uniform(8, 40)
-                    self._rings.append({
-                        "x": max(0, min(w, ix + dist * math.cos(angle))),
-                        "y": max(0, min(h, iy + dist * 0.35 * math.sin(angle))),
-                        "r": random.uniform(1.0, 2.5),
-                        "alpha": random.randint(80, 150),
-                        "color": random.choice(self._RING_COLORS),
-                        "speed": random.uniform(0.8, 1.8),
-                        "max_r": random.uniform(14, 36),
-                    })
             else:
                 surviving.append(d)
         self._drops = surviving
