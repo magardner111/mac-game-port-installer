@@ -1067,7 +1067,7 @@ class BloodRippleOverlay(QWidget):
         self._recent_drips: deque = deque(maxlen=2)
         if _HAS_SOUND:
             _drips_dir = Path(__file__).parent / "assets" / "drips"
-            for wav in sorted(_drips_dir.glob("*.wav")):
+            for wav in sorted(w for w in _drips_dir.glob("*.wav") if w.name != "splash.wav"):
                 fx = _QSoundEffect()
                 fx.setSource(QUrl.fromLocalFile(str(wav)))
                 fx.setVolume(0.75)
