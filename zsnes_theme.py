@@ -1106,20 +1106,33 @@ class WaterfallOverlay(QWidget):
         w = max(self.width(), 1)
         h = max(self.height(), 1)
         for _ in range(4):
+            r = random.uniform(4, 11)
+            # Spatter: biased upward (negative dy), scattered sideways
+            spatter = []
+            for _ in range(random.randint(3, 7)):
+                dist = random.uniform(r * 0.7, r * 2.2)
+                spatter.append((
+                    random.uniform(-dist, dist),           # dx — any direction
+                    random.uniform(-dist * 1.4, dist * 0.3),  # dy — biased up
+                    random.uniform(1.0, 3.0),              # spray dot radius
+                ))
             self._steam.append({
-                "x":     random.uniform(0, w),
-                "y":     float(h - random.randint(0, 18)),
-                "vy":    random.uniform(-0.5, -1.3),
-                "vx":    random.uniform(-0.2, 0.2),
-                "alpha": random.uniform(35, 65),
-                "fade":  random.uniform(0.7, 1.1),
-                "r":     random.uniform(4, 11),
+                "x":        random.uniform(0, w),
+                "y":        float(h - random.randint(0, 18)),
+                "vy":       random.uniform(-0.5, -1.3),
+                "vx":       random.uniform(-0.2, 0.2),
+                "alpha":    random.uniform(35, 65),
+                "fade":     random.uniform(0.7, 1.1),
+                "r":        r,
+                "rx_scale": random.uniform(0.8, 1.3),
+                "ry_scale": random.uniform(0.6, 1.1),
+                "spatter":  spatter,
             })
         for s in self._steam:
             s["y"]     += s["vy"]
             s["x"]     += s["vx"]
             s["alpha"] -= s["fade"]
-            s["r"]     += 0.08   # expand slightly as it rises
+            s["r"]     += 0.06   # expand slightly as it rises
         self._steam = [s for s in self._steam if s["alpha"] > 0]
 
         self.update()
@@ -1153,14 +1166,24 @@ class WaterfallOverlay(QWidget):
         p = QPainter(self)
         p.drawImage(0, 0, img)
 
-        # Steam: soft rising puffs at the bottom
+        # Steam: blob puffs with upward-biased spray dots
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setPen(Qt.PenStyle.NoPen)
         for s in self._steam:
-            a = max(0, min(255, int(s["alpha"])))
-            r = int(s["r"])
+            a  = max(0, min(255, int(s["alpha"])))
+            cx, cy = int(s["x"]), int(s["y"])
+            rx = max(1, int(s["r"] * s["rx_scale"]))
+            ry = max(1, int(s["r"] * s["ry_scale"]))
+            # Main blob
             p.setBrush(QColor(210, 235, 255, a))
-            p.setPen(Qt.PenStyle.NoPen)
-            p.drawEllipse(int(s["x"] - r), int(s["y"] - r), r * 2, r * 2)
+            p.drawEllipse(cx - rx, cy - ry, rx * 2, ry * 2)
+            # Spray dots
+            for (dx, dy, sr) in s["spatter"]:
+                sa = max(0, int(a * random.uniform(0.25, 0.55)))
+                sr2 = max(1, int(sr))
+                p.setBrush(QColor(200, 230, 255, sa))
+                p.drawEllipse(cx + int(dx) - sr2, cy + int(dy) - sr2,
+                              sr2 * 2, sr2 * 2)
 
     # ── Resize ────────────────────────────────────────────────────────────────
 
