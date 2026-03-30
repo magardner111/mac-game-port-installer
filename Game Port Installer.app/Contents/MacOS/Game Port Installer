@@ -6,10 +6,31 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 DIR="$(cd "$(dirname "$0")/../../../" && pwd)"
 cd "$DIR"
 
-# Auto-install Python dependencies if any are missing
-python3 -c "import PySide6, py7zr, xxhash, numpy" 2>/dev/null || {
-    python3 -m pip install -r requirements.txt --quiet --break-system-packages 2>/dev/null \
-    || python3 -m pip install -r requirements.txt --quiet
-}
+VENV="$DIR/.venv"
+PYTHON="$VENV/bin/python3"
 
-exec arch -arm64 python3 main.py
+# If the venv doesn't exist or is missing packages, set it up in a visible Terminal
+if [ ! -f "$PYTHON" ] || ! "$PYTHON" -c "import PySide6, py7zr, xxhash, numpy" 2>/dev/null; then
+    osascript - "$DIR" "$VENV" <<'APPLESCRIPT'
+        on run argv
+            set projectDir to item 1 of argv
+            set venvDir to item 2 of argv
+            set setupScript to "cd " & quoted form of projectDir & " && " & ¬
+                "echo '=== Game Port Installer Setup ===' && " & ¬
+                "echo 'Setting up Python environment...' && " & ¬
+                "python3 -m venv " & quoted form of venvDir & " && " & ¬
+                quoted form of venvDir & "/bin/pip install --upgrade pip --quiet && " & ¬
+                quoted form of venvDir & "/bin/pip install -r requirements.txt && " & ¬
+                "echo '' && echo 'Setup complete! You can close this window.' && " & ¬
+                "echo 'Launch the app again to start.' || " & ¬
+                "echo 'ERROR: Setup failed. Make sure Python 3 is installed.'"
+            tell application "Terminal"
+                activate
+                do script setupScript
+            end tell
+        end run
+APPLESCRIPT
+    exit 0
+fi
+
+exec "$PYTHON" main.py
