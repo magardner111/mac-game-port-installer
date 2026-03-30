@@ -209,6 +209,7 @@ class GameDialog(QDialog):
         self._poll_timer.setInterval(500)
         self._poll_timer.timeout.connect(self._poll_running)
         self._poll_timer.start()
+        self.finished.connect(self._poll_timer.stop)
 
     def _build_ui(self):
         root = QVBoxLayout(self)
@@ -807,6 +808,7 @@ class MainWindow(QMainWindow):
         self._release_cache: dict[str, dict] = {}   # folder → release
         self._scan_thread = None
         self._scan_worker = None
+        self._auto_update_threads: list[QThread] = []
 
         installer.GAMES_DIR.mkdir(parents=True, exist_ok=True)
         self._build_ui()
@@ -992,8 +994,23 @@ class MainWindow(QMainWindow):
         thread.started.connect(worker.run)
         worker.finished.connect(thread.quit)
         worker.finished.connect(lambda tag: self._on_release_fetched(game["folder"], release))
+        worker.finished.connect(lambda: self._auto_update_threads.remove(thread)
+                                if thread in self._auto_update_threads else None)
         worker.error.connect(thread.quit)
+        self._auto_update_threads.append(thread)
         thread.start()
+
+    def closeEvent(self, event):
+        # Stop the background release scan
+        if self._scan_thread and self._scan_thread.isRunning():
+            self._scan_thread.quit()
+            self._scan_thread.wait(3000)
+        # Stop any in-progress auto-update installs
+        for thread in list(self._auto_update_threads):
+            if thread.isRunning():
+                thread.quit()
+                thread.wait(3000)
+        event.accept()
 
     # ── Populate ───────────────────────────────────────────────────────────────
 
