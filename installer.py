@@ -613,7 +613,7 @@ def _gb_get_source(work_dir: Path) -> Path:
              "https://github.com/arcanite24/gb-recompiled.git", str(src)],
             env=env, capture_output=True, check=True,
         )
-    return src
+    return src.resolve()
 
 
 def _gb_patch_cmake(recomp_out: Path, gbrecomp_src: Path) -> None:
@@ -631,7 +631,7 @@ def _gb_patch_cmake(recomp_out: Path, gbrecomp_src: Path) -> None:
     content = cmake_path.read_text()
     # Match any absolute path whose last two segments are runtime/src (or
     # runtime/include etc.) and rewrite to our local clone.
-    local_runtime = str(gbrecomp_src / "runtime")
+    local_runtime = str((gbrecomp_src / "runtime").resolve())
     patched = re.sub(
         r'["\']?(?:/[^/"\'\s]+)*/runtime(["\'/])',
         lambda m: local_runtime + m.group(1),
