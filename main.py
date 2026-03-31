@@ -839,14 +839,48 @@ _GB_STEP_NAMES = {
 _GB_STEP_ICONS = {"pending": "⏳", "running": "🔄", "done": "✔",
                   "skip": "✔", "error": "✖"}
 
-_RED_BTN_ON  = ("background:#8b0000; color:#ffffff; border:2px solid #ff4444;"
-                "border-radius:4px; padding:6px 18px; font-weight:bold;")
-_RED_BTN_OFF = ("background:#3a1010; color:#aa6666; border:2px solid #5a2020;"
-                "border-radius:4px; padding:6px 18px;")
-_BLU_BTN_ON  = ("background:#003080; color:#ffffff; border:2px solid #4488ff;"
-                "border-radius:4px; padding:6px 18px; font-weight:bold;")
-_BLU_BTN_OFF = ("background:#101a3a; color:#6677aa; border:2px solid #1a2a5a;"
-                "border-radius:4px; padding:6px 18px;")
+# Variant button styles: (on, off) pairs keyed by variant key.
+# "on"  = selected/active state
+# "off" = unselected state
+_VARIANT_BTN_STYLES: dict[str, tuple[str, str]] = {
+    "red": (
+        "background:#8b0000; color:#ffffff; border:2px solid #ff4444;"
+        "border-radius:4px; padding:6px 18px; font-weight:bold;",
+        "background:#3a1010; color:#aa6666; border:2px solid #5a2020;"
+        "border-radius:4px; padding:6px 18px;",
+    ),
+    "blue": (
+        "background:#003080; color:#ffffff; border:2px solid #4488ff;"
+        "border-radius:4px; padding:6px 18px; font-weight:bold;",
+        "background:#101a3a; color:#6677aa; border:2px solid #1a2a5a;"
+        "border-radius:4px; padding:6px 18px;",
+    ),
+    "gold": (
+        "background:#8b6800; color:#ffffff; border:2px solid #ffd700;"
+        "border-radius:4px; padding:6px 18px; font-weight:bold;",
+        "background:#3a2a00; color:#aa9040; border:2px solid #5a4400;"
+        "border-radius:4px; padding:6px 18px;",
+    ),
+    "silver": (
+        "background:#506070; color:#ffffff; border:2px solid #c0d0e0;"
+        "border-radius:4px; padding:6px 18px; font-weight:bold;",
+        "background:#202830; color:#708090; border:2px solid #384858;"
+        "border-radius:4px; padding:6px 18px;",
+    ),
+    "crystal": (
+        "background:#006878; color:#ffffff; border:2px solid #00e8ff;"
+        "border-radius:4px; padding:6px 18px; font-weight:bold;",
+        "background:#002830; color:#408898; border:2px solid #004858;"
+        "border-radius:4px; padding:6px 18px;",
+    ),
+}
+# Fallback for any unknown key
+_VARIANT_BTN_DEFAULT = (
+    "background:#404040; color:#ffffff; border:2px solid #888888;"
+    "border-radius:4px; padding:6px 18px; font-weight:bold;",
+    "background:#202020; color:#888888; border:2px solid #444444;"
+    "border-radius:4px; padding:6px 18px;",
+)
 
 
 class GBRecompDialog(QDialog):
@@ -855,11 +889,14 @@ class GBRecompDialog(QDialog):
 
     def __init__(self, parent, game: dict):
         super().__init__(parent)
-        self.game    = game
-        self._thread = None
-        self._worker = None
-        # Load saved variant (default red)
-        self._variant = app_settings.get("pokemon_variant") or "red"
+        self.game     = game
+        self._thread  = None
+        self._worker  = None
+        self._variants = installer._gb_variants(game)
+        # Load saved variant, defaulting to the first defined variant
+        _default_key   = self._variants[0]["key"] if self._variants else "red"
+        _settings_key  = f"gb_variant_{game['folder']}"
+        self._variant  = app_settings.get(_settings_key) or _default_key
 
         self.setWindowTitle(game["name"])
         self.setMinimumWidth(520)
@@ -881,11 +918,13 @@ class GBRecompDialog(QDialog):
         root.setContentsMargins(20, 16, 20, 16)
 
         # Title
-        title = QLabel("Pokemon Red / Blue")
+        title = QLabel(self.game["name"])
         f = title.font(); f.setPointSize(15); f.setBold(True); title.setFont(f)
         root.addWidget(title)
 
-        sub = QLabel("pret/pokered  \u203a  GB Recompiled  \u203a  native binary")
+        # Subtitle: list unique source repos
+        _repos = list(dict.fromkeys(v["source_repo"] for v in self._variants))
+        sub = QLabel("  \u203a  ".join(_repos) + "  \u203a  GB Recompiled  \u203a  native binary")
         sub.setStyleSheet("color:#a0a0c0;")
         root.addWidget(sub)
 
@@ -893,17 +932,17 @@ class GBRecompDialog(QDialog):
         sep.setStyleSheet("background:#4040b0;")
         root.addWidget(sep)
 
-        # ── Variant toggle ────────────────────────────────────────────────────
+        # ── Variant toggle (dynamically built from game["gb_variants"]) ───────
         var_row = QHBoxLayout()
         var_row.setSpacing(10)
-        self._red_btn = QPushButton("RED VERSION")
-        self._blu_btn = QPushButton("BLUE VERSION")
-        self._red_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._blu_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._red_btn.clicked.connect(lambda: self._select_variant("red"))
-        self._blu_btn.clicked.connect(lambda: self._select_variant("blue"))
-        var_row.addWidget(self._red_btn)
-        var_row.addWidget(self._blu_btn)
+        self._variant_btns: dict[str, QPushButton] = {}
+        for v in self._variants:
+            btn = QPushButton(v["label"])
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            key = v["key"]
+            btn.clicked.connect(lambda _checked=False, k=key: self._select_variant(k))
+            var_row.addWidget(btn)
+            self._variant_btns[key] = btn
         var_row.addStretch()
         root.addLayout(var_row)
 
@@ -986,23 +1025,23 @@ class GBRecompDialog(QDialog):
         if variant == self._variant:
             return
         self._variant = variant
-        app_settings.set_value("pokemon_variant", variant)
+        app_settings.set_value(f"gb_variant_{self.game['folder']}", variant)
         self._apply_variant_style()
-        label = "Red Version" if variant == "red" else "Blue Version"
+        v_info = next((v for v in self._variants if v["key"] == variant), None)
+        label  = v_info["label"].title() if v_info else variant.title()
         self.progress_label.setText(f"Selected {label} — press RUN to play.")
 
     def _apply_variant_style(self):
-        if self._variant == "red":
-            self._red_btn.setStyleSheet(_RED_BTN_ON)
-            self._blu_btn.setStyleSheet(_BLU_BTN_OFF)
-        else:
-            self._red_btn.setStyleSheet(_RED_BTN_OFF)
-            self._blu_btn.setStyleSheet(_BLU_BTN_ON)
+        for key, btn in self._variant_btns.items():
+            styles = _VARIANT_BTN_STYLES.get(key, _VARIANT_BTN_DEFAULT)
+            btn.setStyleSheet(styles[0] if key == self._variant else styles[1])
 
     def _game_with_variant(self) -> dict:
         """Return game dict with variant and the correct launch_binary set."""
-        stem = "pokered" if self._variant == "red" else "pokeblue"
-        return {**self.game, "gb_variant": self._variant, "launch_binary": stem}
+        v_info = next((v for v in self._variants if v["key"] == self._variant),
+                      self._variants[0] if self._variants else {})
+        return {**self.game, "gb_variant": self._variant,
+                "launch_binary": v_info.get("stem", self._variant)}
 
     # ── Step display ───────────────────────────────────────────────────────────
 

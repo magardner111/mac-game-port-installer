@@ -362,10 +362,27 @@ GAMES = [
         "type": "Recomp",
         "platforms": ["macOS"],
         "icon_url": None,
-        # Custom 4-step pipeline: fetch pret/pokered → assemble (RGBDS) →
-        # recompile (GB Recompiled) → build native (cmake + SDL2).
-        # Variant (red|blue) is chosen in the dialog and stored in settings.
         "build_type": "gb_recomp",
         "source_repo": "pret/pokered",
+        "gb_variants": [
+            {"key": "red",  "stem": "pokered",  "make_target": "",     "label": "RED VERSION",  "source_repo": "pret/pokered"},
+            {"key": "blue", "stem": "pokeblue", "make_target": "blue", "label": "BLUE VERSION", "source_repo": "pret/pokered"},
+        ],
+    },
+    {
+        "name": "Pokemon Gold / Silver / Crystal",
+        "game_title": "GB Recompiled",
+        "console": "Game Boy",
+        "folder": "PokemonGSC",
+        "type": "Recomp",
+        "platforms": ["macOS"],
+        "icon_url": None,
+        "build_type": "gb_recomp",
+        "source_repo": "pret/pokegold",
+        "gb_variants": [
+            {"key": "gold",    "stem": "pokegold",    "make_target": "gold",   "label": "GOLD VERSION",    "source_repo": "pret/pokegold"},
+            {"key": "silver",  "stem": "pokesilver",  "make_target": "silver", "label": "SILVER VERSION",  "source_repo": "pret/pokegold"},
+            {"key": "crystal", "stem": "pokecrystal", "make_target": "",       "label": "CRYSTAL VERSION", "source_repo": "pret/pokecrystal"},
+        ],
     },
 ]

@@ -28,7 +28,9 @@ _DEFAULTS: dict = {
     "waterfall_effect": False,
     "nesticle_cursor": False,
     "blood_trail": False,
-    "pokemon_variant": "red",
+    "pokemon_variant": "red",          # legacy key, kept for migration
+    "gb_variant_PokemonRedBlue": "red",
+    "gb_variant_PokemonGSC": "gold",
 }
 
 

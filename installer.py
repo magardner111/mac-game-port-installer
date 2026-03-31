@@ -765,28 +765,41 @@ def _gb_get_recompiler(gbrecomp_src: Path) -> Path:
     return bin_out
 
 
-_GB_VARIANTS = [("", "pokered"), ("blue", "pokeblue")]   # (make_target, stem)
+def _gb_variants(game: dict) -> list[dict]:
+    """Return the list of variant dicts for a gb_recomp game."""
+    return game.get("gb_variants", [])
+
+
+def _gb_source_dirs(variants: list[dict]) -> dict[str, str]:
+    """Map unique source_repo → local directory name (e.g. 'pret/pokered' → 'pokered_src')."""
+    seen: dict[str, str] = {}
+    for v in variants:
+        repo = v["source_repo"]
+        if repo not in seen:
+            seen[repo] = repo.split("/")[-1] + "_src"
+    return seen
 
 
 def gb_step_status(game: dict, os_name: str = "macOS") -> dict[int, str]:
     """
     Return current status of each step: "done" | "pending".
     Steps: 1=Fetch, 2=Assemble, 3=Recompile, 4=Build.
-    Both Red and Blue are always built together.
+    All variants are always built together.
     """
     dest         = game_dir(game, os_name)
     work_dir     = dest / "_work"
     gbrecomp_src = work_dir / "gbrecomp_src"
+    variants     = _gb_variants(game)
 
-    both_roms    = all((work_dir / f"{s}.gbc").exists()       for _, s in _GB_VARIANTS)
-    both_recomps = all((gbrecomp_src / "output" / s).exists() for _, s in _GB_VARIANTS)
-    both_bins    = all((dest / s).exists()                     for _, s in _GB_VARIANTS)
+    all_roms    = all((work_dir / f"{v['stem']}.gbc").exists()          for v in variants)
+    all_recomps = all((gbrecomp_src / "output" / v["stem"]).exists()    for v in variants)
+    all_bins    = all((dest / v["stem"]).exists()                        for v in variants)
 
     return {
-        1: "done" if (work_dir / "_step_1_fetched").exists()                        else "pending",
-        2: "done" if (work_dir / "_step_2_assembled").exists()  and both_roms        else "pending",
-        3: "done" if (work_dir / "_step_3_recompiled").exists() and both_recomps     else "pending",
-        4: "done" if (work_dir / "_step_4_built").exists()      and both_bins        else "pending",
+        1: "done" if (work_dir / "_step_1_fetched").exists()                         else "pending",
+        2: "done" if (work_dir / "_step_2_assembled").exists()  and all_roms          else "pending",
+        3: "done" if (work_dir / "_step_3_recompiled").exists() and all_recomps       else "pending",
+        4: "done" if (work_dir / "_step_4_built").exists()      and all_bins          else "pending",
     }
 
 
@@ -795,22 +808,25 @@ def gb_rerun_from(game: dict, from_step: int, os_name: str = "macOS") -> None:
     dest     = game_dir(game, os_name)
     work_dir = dest / "_work"
     work_dir.mkdir(parents=True, exist_ok=True)
+    variants  = _gb_variants(game)
+    src_dirs  = _gb_source_dirs(variants)
     for step in range(from_step, 5):
         (work_dir / f"_step_{step}_fetched"   ).unlink(missing_ok=True)
         (work_dir / f"_step_{step}_assembled" ).unlink(missing_ok=True)
         (work_dir / f"_step_{step}_recompiled").unlink(missing_ok=True)
         (work_dir / f"_step_{step}_built"     ).unlink(missing_ok=True)
     if from_step <= 1:
-        shutil.rmtree(work_dir / "pokered_src", ignore_errors=True)
+        for src_dir in src_dirs.values():
+            shutil.rmtree(work_dir / src_dir, ignore_errors=True)
     if from_step <= 2:
-        for _, stem in _GB_VARIANTS:
-            (work_dir / f"{stem}.gbc").unlink(missing_ok=True)
+        for v in variants:
+            (work_dir / f"{v['stem']}.gbc").unlink(missing_ok=True)
     if from_step <= 3:
-        shutil.rmtree(work_dir / "recomp_out", ignore_errors=True)           # old location
+        shutil.rmtree(work_dir / "recomp_out", ignore_errors=True)       # old location
         shutil.rmtree(work_dir / "gbrecomp_src" / "output", ignore_errors=True)
     if from_step <= 4:
-        for _, stem in _GB_VARIANTS:
-            (dest / stem).unlink(missing_ok=True)
+        for v in variants:
+            (dest / v["stem"]).unlink(missing_ok=True)
 
 
 def build_gb_recomp(game: dict, dest: Path,
@@ -839,59 +855,59 @@ def build_gb_recomp(game: dict, dest: Path,
     work_dir = dest / "_work"
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    # Both Red and Blue are always built together so switching is instant.
-    # _GB_VARIANTS = [("", "pokered"), ("blue", "pokeblue")]
+    variants = _gb_variants(game)
+    src_dirs = _gb_source_dirs(variants)   # repo → local dir name
 
-    # ── Step 1: Fetch source ──────────────────────────────────────────────────
-    step1_marker = work_dir / "_step_1_fetched"
-    src_dir      = work_dir / "pokered_src"
-    if step1_marker.exists() and src_dir.exists():
+    # ── Step 1: Fetch all source repos ───────────────────────────────────────
+    step1_marker   = work_dir / "_step_1_fetched"
+    _all_src_exist = all((work_dir / d).exists() for d in src_dirs.values())
+    if step1_marker.exists() and _all_src_exist:
         _sc(1, "skip")
     else:
         step1_marker.unlink(missing_ok=True)
         _sc(1, "running")
         _cb(5)
         try:
-            if src_dir.exists():
-                result = subprocess.run(
-                    ["git", "-C", str(src_dir), "pull", "--depth=1"],
+            commits = []
+            for repo, dir_name in src_dirs.items():
+                src_dir = work_dir / dir_name
+                url = f"https://github.com/{repo}.git"
+                if src_dir.exists():
+                    subprocess.run(
+                        ["git", "-C", str(src_dir), "pull", "--depth=1"],
+                        env=env, capture_output=True, text=True, check=False,
+                    )
+                else:
+                    result = subprocess.run(
+                        ["git", "clone", "--depth=1", url, str(src_dir)],
+                        env=env, capture_output=True, text=True,
+                    )
+                    if result.returncode != 0:
+                        raise RuntimeError(
+                            f"git clone {repo} failed:\n" + result.stderr[-2000:]
+                        )
+                hash_r = subprocess.run(
+                    ["git", "-C", str(src_dir), "rev-parse", "--short", "HEAD"],
                     env=env, capture_output=True, text=True,
                 )
-            else:
-                result = subprocess.run(
-                    ["git", "clone", "--depth=1",
-                     "https://github.com/pret/pokered.git", str(src_dir)],
-                    env=env, capture_output=True, text=True,
-                )
-            if result.returncode != 0:
-                raise RuntimeError(
-                    f"git failed (exit {result.returncode}):\n"
-                    + result.stderr[-2000:]
-                )
-            hash_r = subprocess.run(
-                ["git", "-C", str(src_dir), "rev-parse", "--short", "HEAD"],
-                env=env, capture_output=True, text=True,
-            )
-            commit = hash_r.stdout.strip() or "unknown"
-            step1_marker.write_text(commit)
+                commits.append(hash_r.stdout.strip() or "unknown")
+            step1_marker.write_text("+".join(commits))
             _sc(1, "done")
             _cb(20)
         except Exception:
             _sc(1, "error")
             raise
 
-    # ── Step 2: Assemble both ROMs (Red + Blue) ───────────────────────────────
+    # ── Step 2: Assemble all variant ROMs ────────────────────────────────────
     step2_marker = work_dir / "_step_2_assembled"
-    _both_roms   = all((work_dir / f"{s}.gbc").exists() for _, s in _GB_VARIANTS)
-    if step2_marker.exists() and _both_roms:
+    _all_roms    = all((work_dir / f"{v['stem']}.gbc").exists() for v in variants)
+    if step2_marker.exists() and _all_roms:
         _sc(2, "skip")
     else:
         step2_marker.unlink(missing_ok=True)
         _sc(2, "running")
         _cb(25)
         try:
-            if not src_dir.exists():
-                raise RuntimeError("pokered source not found — re-run Step 1.")
             if not shutil.which("rgbasm", path=env["PATH"]):
                 _cb(27)
                 r = subprocess.run(
@@ -905,39 +921,46 @@ def build_gb_recomp(game: dict, dest: Path,
                     )
             _cb(30)
             cpu = os.cpu_count() or 1
-            for make_target, stem in _GB_VARIANTS:
-                cmd = ["make"] + ([make_target] if make_target else []) + [f"-j{cpu}"]
+            for v in variants:
+                src_dir = work_dir / src_dirs[v["source_repo"]]
+                if not src_dir.exists():
+                    raise RuntimeError(
+                        f"Source for {v['stem']} not found — re-run Step 1."
+                    )
+                target_arg = v["make_target"]
+                cmd = ["make"] + ([target_arg] if target_arg else []) + [f"-j{cpu}"]
                 result = subprocess.run(
                     cmd, cwd=str(src_dir), env=env, capture_output=True, text=True,
                 )
                 if result.returncode != 0:
                     raise RuntimeError(
-                        f"make {make_target or 'red'} failed (exit {result.returncode}):\n"
+                        f"make {target_arg or v['stem']} failed "
+                        f"(exit {result.returncode}):\n"
                         + (result.stdout + result.stderr)[-3000:]
                     )
-                rom_src = src_dir / f"{stem}.gbc"
+                rom_src = src_dir / f"{v['stem']}.gbc"
                 if not rom_src.exists():
                     raise RuntimeError(
-                        f"Expected ROM '{stem}.gbc' not produced by make.\n"
+                        f"Expected ROM '{v['stem']}.gbc' not produced by make.\n"
                         + (result.stdout + result.stderr)[-1000:]
                     )
-                shutil.copy2(rom_src, work_dir / f"{stem}.gbc")
+                shutil.copy2(rom_src, work_dir / f"{v['stem']}.gbc")
             _cb(45)
-            shutil.rmtree(src_dir)
-            step2_marker.write_text("red+blue")
+            # Delete all source trees now that ROMs are safely copied out
+            for dir_name in src_dirs.values():
+                shutil.rmtree(work_dir / dir_name, ignore_errors=True)
+            step2_marker.write_text("+".join(v["stem"] for v in variants))
             _sc(2, "done")
             _cb(50)
         except Exception:
             _sc(2, "error")
             raise
 
-    # ── Step 3: Recompile both ROMs via GB Recompiled ─────────────────────────
-    # Output dirs live inside gbrecomp_src so fs::relative() depth=2 →
-    # GBRT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../runtime" resolves correctly.
+    # ── Step 3: Recompile all ROMs via GB Recompiled ─────────────────────────
     step3_marker  = work_dir / "_step_3_recompiled"
     _gbs          = work_dir / "gbrecomp_src"
-    _both_recomps = all((_gbs / "output" / s).exists() for _, s in _GB_VARIANTS)
-    if step3_marker.exists() and _both_recomps:
+    _all_recomps  = all((_gbs / "output" / v["stem"]).exists() for v in variants)
+    if step3_marker.exists() and _all_recomps:
         _sc(3, "skip")
     else:
         step3_marker.unlink(missing_ok=True)
@@ -948,28 +971,31 @@ def build_gb_recomp(game: dict, dest: Path,
             _cb(60)
             recomp_bin   = _gb_get_recompiler(gbrecomp_src)
             _cb(65)
-            for _, stem in _GB_VARIANTS:
-                rom_file  = work_dir / f"{stem}.gbc"
+            for v in variants:
+                rom_file = work_dir / f"{v['stem']}.gbc"
                 if not rom_file.exists():
-                    raise RuntimeError(f"ROM not found: {stem}.gbc — re-run Step 2.")
-                out_dir   = gbrecomp_src / "output" / stem
+                    raise RuntimeError(
+                        f"ROM not found: {v['stem']}.gbc — re-run Step 2."
+                    )
+                out_dir = gbrecomp_src / "output" / v["stem"]
                 if out_dir.exists():
                     shutil.rmtree(out_dir)
                 out_dir.mkdir(parents=True)
                 result = subprocess.run(
                     [str(recomp_bin), str(rom_file.resolve()),
-                     "--output", f"output/{stem}"],
+                     "--output", f"output/{v['stem']}"],
                     cwd=str(gbrecomp_src), env=env,
                     capture_output=True, text=True,
                 )
                 if result.returncode != 0:
                     raise RuntimeError(
-                        f"gb-recompiled failed on {stem} (exit {result.returncode}):\n"
+                        f"gb-recompiled failed on {v['stem']} "
+                        f"(exit {result.returncode}):\n"
                         + (result.stdout + result.stderr)[-3000:]
                     )
                 if not (out_dir / "CMakeLists.txt").exists():
                     raise RuntimeError(
-                        f"gb-recompiled produced no CMakeLists.txt for {stem}.\n"
+                        f"gb-recompiled produced no CMakeLists.txt for {v['stem']}.\n"
                         "Output:\n" + (result.stdout + result.stderr)[-1000:]
                     )
             step3_marker.write_text("ok")
@@ -979,11 +1005,11 @@ def build_gb_recomp(game: dict, dest: Path,
             _sc(3, "error")
             raise
 
-    # ── Step 4: cmake build both binaries ─────────────────────────────────────
+    # ── Step 4: cmake build all binaries ─────────────────────────────────────
     _gbs_resolved = (work_dir / "gbrecomp_src").resolve()
     step4_marker  = work_dir / "_step_4_built"
-    _both_bins    = all((dest / s).exists() for _, s in _GB_VARIANTS)
-    if step4_marker.exists() and _both_bins:
+    _all_bins     = all((dest / v["stem"]).exists() for v in variants)
+    if step4_marker.exists() and _all_bins:
         _sc(4, "skip")
     else:
         step4_marker.unlink(missing_ok=True)
@@ -999,10 +1025,11 @@ def build_gb_recomp(game: dict, dest: Path,
             _SKIP_SUFF = {".cmake", ".h", ".cpp", ".c", ".so", ".dylib",
                           ".a", ".bin", ".o", ".obj"}
             _SKIP_DIRS = {"CMakeFiles", "_deps"}
+            n          = len(variants)
 
-            n_variants = len(_GB_VARIANTS)
-            for v_idx, (_, stem) in enumerate(_GB_VARIANTS):
-                recomp_out = (_gbs_resolved / "output" / stem)
+            for v_idx, v in enumerate(variants):
+                stem       = v["stem"]
+                recomp_out = _gbs_resolved / "output" / stem
                 if not recomp_out.exists():
                     raise RuntimeError(
                         f"Recompiled project for {stem} not found — re-run Step 3."
@@ -1011,7 +1038,7 @@ def build_gb_recomp(game: dict, dest: Path,
                 if cmake_build.exists():
                     shutil.rmtree(cmake_build)
                 cmake_build.mkdir()
-                pct_base = 82 + v_idx * (14 // n_variants)
+                pct_base = 82 + v_idx * (14 // n)
                 _cb(pct_base)
                 result = subprocess.run(
                     ["cmake", str(recomp_out), "-DCMAKE_BUILD_TYPE=Release",
@@ -1034,10 +1061,8 @@ def build_gb_recomp(game: dict, dest: Path,
                         f"cmake build failed for {stem}:\n"
                         + (result.stdout + result.stderr)[-3000:]
                     )
-                # Copy the named binary to dest
                 bin_path = cmake_build / stem
                 if not bin_path.exists():
-                    # Fallback: find any non-internal executable
                     candidates = sorted(
                         [p for p in cmake_build.rglob("*")
                          if p.is_file() and p.stat().st_mode & 0o111
@@ -1056,7 +1081,7 @@ def build_gb_recomp(game: dict, dest: Path,
                     target.unlink()
                 shutil.copy2(bin_path, target)
                 os.chmod(target, 0o755)
-                shutil.rmtree(recomp_out)   # clean up C source now binary is safe
+                shutil.rmtree(recomp_out)
 
             _cb(97)
             commit = step1_marker.read_text().strip() if step1_marker.exists() else "1.0"
