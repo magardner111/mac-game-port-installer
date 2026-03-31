@@ -1068,6 +1068,33 @@ class GBRecompDialog(QDialog):
     def _run_from(self, from_step: int):
         if self._thread and self._thread.isRunning():
             return
+
+        # ── Source ROM required for asset extraction (e.g. Metroid II) ────────
+        src_rom_name = self.game.get("requires_source_rom")
+        if src_rom_name and from_step <= 2:
+            work_dir  = installer.game_dir(self.game, "macOS") / "_work"
+            work_dir.mkdir(parents=True, exist_ok=True)
+            rom_dest  = work_dir / src_rom_name
+            if not rom_dest.exists():
+                QMessageBox.information(
+                    self, "Source ROM Required",
+                    f"{self.game['name']} requires the original {src_rom_name} "
+                    f"to extract game assets before building.\n\n"
+                    f"Please locate your copy in the next dialog."
+                )
+                path, _ = QFileDialog.getOpenFileName(
+                    self,
+                    f"Locate {src_rom_name}",
+                    str(Path.home()),
+                    f"Game Boy ROM (*.gb *.gbc);;All files (*)",
+                )
+                if not path:
+                    self.build_btn.setEnabled(True)
+                    for b in self._step_btns.values():
+                        b.setEnabled(True)
+                    return
+                shutil.copy2(path, rom_dest)
+
         self.build_btn.setEnabled(False)
         for b in self._step_btns.values():
             b.setEnabled(False)

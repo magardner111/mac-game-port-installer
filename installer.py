@@ -938,11 +938,37 @@ def build_gb_recomp(game: dict, dest: Path,
                     raise RuntimeError(
                         f"Source for {v['stem']} not found — re-run Step 1."
                     )
+                # Copy source ROM into the tree if the game requires one
+                src_rom_name = game.get("requires_source_rom")
+                if src_rom_name:
+                    src_rom_work = work_dir / src_rom_name
+                    if not src_rom_work.exists():
+                        raise RuntimeError(
+                            f"Source ROM '{src_rom_name}' not found in work directory.\n"
+                            "Place the ROM and restart the build."
+                        )
+                    shutil.copy2(src_rom_work, src_dir / src_rom_name)
+
                 # Apply any Makefile text patches declared in the variant
                 for patch in v.get("makefile_patches", []):
                     mf = src_dir / patch.get("file", "Makefile")
                     if mf.exists():
                         mf.write_text(mf.read_text().replace(patch["old"], patch["new"]))
+
+                # Run any pre-make commands (e.g. asset extraction scripts)
+                for pre_cmd in v.get("pre_make", []):
+                    cmd_list = pre_cmd if isinstance(pre_cmd, list) else pre_cmd.split()
+                    pre_result = subprocess.run(
+                        cmd_list, cwd=str(src_dir), env=env,
+                        capture_output=True, text=True,
+                    )
+                    if pre_result.returncode != 0:
+                        raise RuntimeError(
+                            f"Pre-make command {cmd_list[0]} failed "
+                            f"(exit {pre_result.returncode}):\n"
+                            + (pre_result.stdout + pre_result.stderr)[-3000:]
+                        )
+
                 target_arg = v["make_target"]
                 cmd = ["make"] + ([target_arg] if target_arg else []) + [f"-j{cpu}"]
                 result = subprocess.run(
