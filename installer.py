@@ -618,111 +618,100 @@ def _gb_get_source(work_dir: Path) -> Path:
 
 def _gb_patch_cmake(recomp_out: Path, gbrecomp_src: Path) -> None:
     """
-    Fix hardcoded paths in the generated CMakeLists.txt.
+    Fix the GBRT_DIR path in the generated CMakeLists.txt.
 
-    gb-recompiled embeds its build-time absolute paths for the runtime sources.
-    We scan every token that looks like an absolute path, check whether it
-    exists on this machine, and if not search for the same filename inside our
-    local gb-recompiled clone to find the correct location.
+    gb-recompiled generates:
+        set(GBRT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/runtime")
+
+    using absolute paths from the tool author's machine at build time.
+    We replace the entire set(GBRT_DIR ...) line with a direct absolute path
+    to the runtime directory inside our local gb-recompiled clone so that
+    ${GBRT_DIR}/src/gbrt.c etc. resolve correctly without cmake's
+    CMAKE_CURRENT_SOURCE_DIR prefix complicating things.
     """
     import re as _re
     cmake_path = recomp_out / "CMakeLists.txt"
     if not cmake_path.exists():
         return
 
-    content    = cmake_path.read_text()
-    repo_root  = gbrecomp_src.resolve()
-    changed    = False
+    runtime_abs = str((gbrecomp_src / "runtime").resolve())
+    content = cmake_path.read_text()
 
-    def _fix(m: "re.Match") -> str:
-        nonlocal changed
-        token = m.group(0)
-        # Strip surrounding quotes/parens that may have been swept in
-        inner = token.strip("\"'()")
-        if Path(inner).exists():
-            return token          # already valid — leave alone
-        candidates = list(repo_root.rglob(Path(inner).name))
-        if candidates:
-            changed = True
-            # Preserve any leading/trailing quote characters
-            prefix = token[: len(token) - len(token.lstrip("\"'()"))]
-            suffix = token[len(token.rstrip("\"'()")):]
-            return prefix + str(candidates[0]) + suffix
-        return token              # couldn't fix — leave alone
-
-    # Match tokens that look like absolute paths (start with /)
-    patched = _re.sub(r'["\']?/[^\s"\'()]+["\']?', _fix, content)
-    if changed:
-        cmake_path.write_text(patched)
-
-
-def _gb_get_recompiler(work_dir: Path) -> Path:
-    """Return path to the gb-recompiled binary, downloading from GitHub if absent."""
-    bin_path = work_dir / "gb-recompiled"
-    if bin_path.exists():
-        return bin_path
-
-    import platform as _platform
-    arch = _platform.machine().lower()  # "arm64" or "x86_64"
-
-    req = urllib.request.Request(
-        "https://api.github.com/repos/arcanite24/gb-recompiled/releases/latest",
-        headers={"User-Agent": "game-port-installer/1.0"},
+    # Replace the entire set(GBRT_DIR ...) assignment regardless of what value
+    # the tool embedded (absolute path, ${CMAKE_CURRENT_SOURCE_DIR}/..., etc.)
+    patched, n = _re.subn(
+        r'set\s*\(\s*GBRT_DIR\s+[^)]+\)',
+        f'set(GBRT_DIR "{runtime_abs}")',
+        content,
     )
-    try:
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            release = json.loads(resp.read())
-    except Exception as exc:
-        raise RuntimeError(f"Could not fetch gb-recompiled release info: {exc}")
+    if n:
+        cmake_path.write_text(patched)
+    else:
+        # Fallback: targeted substitution for any /runtime sub-path token
+        # that doesn't exist locally.
+        changed = False
 
-    def _score(name: str) -> int:
-        n = name.lower()
-        s = 0
-        if "mac" in n or "darwin" in n:
-            s += 10
-        if arch in n:
-            s += 5
-        if "universal" in n or "arm" in n:
-            s += 3
-        return s
+        def _fix(m: "_re.Match") -> str:
+            nonlocal changed
+            token = m.group(0)
+            inner = token.strip("\"'")
+            if Path(inner).exists():
+                return token
+            if "/runtime" in inner:
+                suffix = inner[inner.index("/runtime") + len("/runtime"):]
+                fixed = runtime_abs + suffix
+                changed = True
+                q = token[0] if token[0] in "\"'" else ""
+                return f"{q}{fixed}{q}"
+            return token
 
-    assets = release.get("assets", [])
-    best = max(assets, key=lambda a: _score(a["name"]), default=None)
-    if not best or _score(best["name"]) < 5:
+        patched = _re.sub(r'["\']?/[^\s"\'()]+["\']?', _fix, content)
+        if changed:
+            cmake_path.write_text(patched)
+
+
+def _gb_get_recompiler(gbrecomp_src: Path) -> Path:
+    """
+    Build the gb-recompiled binary from the cloned source.
+
+    The pre-built release binaries embed version-specific paths that mismatch
+    the cloned runtime source, so we always build from the source we cloned.
+    The built binary lands at gbrecomp_src/_build/bin/gbrecomp.
+    """
+    env     = _gb_env()
+    build   = gbrecomp_src / "_build"
+    bin_out = build / "bin" / "gbrecomp"
+    if bin_out.exists():
+        return bin_out
+
+    build.mkdir(parents=True, exist_ok=True)
+    # cmake configure
+    result = subprocess.run(
+        ["cmake", str(gbrecomp_src), "-DCMAKE_BUILD_TYPE=Release",
+         "-DBUILD_TESTS=OFF"],
+        cwd=str(build), env=env, capture_output=True, text=True,
+    )
+    if result.returncode != 0:
         raise RuntimeError(
-            "No macOS gb-recompiled binary found in the latest release.\n"
-            "Check https://github.com/arcanite24/gb-recompiled/releases"
+            "cmake configure for gb-recompiled failed:\n"
+            + (result.stdout + result.stderr)[-2000:]
         )
-
-    tmp_suffix = Path(best["name"]).suffix or ".bin"
-    with tempfile.NamedTemporaryFile(delete=False, suffix=tmp_suffix) as fh:
-        tmp_path = Path(fh.name)
-    try:
-        urllib.request.urlretrieve(best["browser_download_url"], tmp_path)
-        name_lower = best["name"].lower()
-        if name_lower.endswith(".zip"):
-            with zipfile.ZipFile(tmp_path) as zf:
-                for member in zf.namelist():
-                    if "gb-recompiled" in member.lower() and not member.endswith("/"):
-                        bin_path.write_bytes(zf.read(member))
-                        break
-        elif ".tar" in name_lower or name_lower.endswith((".gz", ".xz")):
-            with tarfile.open(tmp_path) as tf:
-                for member in tf.getmembers():
-                    if "gb-recompiled" in member.name.lower() and member.isfile():
-                        fobj = tf.extractfile(member)
-                        if fobj:
-                            bin_path.write_bytes(fobj.read())
-                        break
-        else:
-            shutil.copy2(tmp_path, bin_path)
-    finally:
-        tmp_path.unlink(missing_ok=True)
-
-    if not bin_path.exists():
-        raise RuntimeError("Failed to extract gb-recompiled binary from download.")
-    os.chmod(bin_path, 0o755)
-    return bin_path
+    # cmake build
+    import os as _os
+    result = subprocess.run(
+        ["cmake", "--build", ".", "--parallel", str(_os.cpu_count() or 4)],
+        cwd=str(build), env=env, capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Building gb-recompiled from source failed:\n"
+            + (result.stdout + result.stderr)[-2000:]
+        )
+    if not bin_out.exists():
+        raise RuntimeError(
+            f"gb-recompiled build succeeded but binary not found at {bin_out}"
+        )
+    return bin_out
 
 
 def gb_step_status(game: dict, os_name: str = "macOS") -> dict[int, str]:
@@ -778,6 +767,8 @@ def gb_rerun_from(game: dict, from_step: int, os_name: str = "macOS") -> None:
         (work_dir / rom_name).unlink(missing_ok=True)
     if from_step <= 3:
         shutil.rmtree(work_dir / "recomp_out", ignore_errors=True)
+        shutil.rmtree(work_dir / "gbrecomp_src" / "recomp_out", ignore_errors=True)
+        shutil.rmtree(work_dir / "gbrecomp_src" / "output", ignore_errors=True)
 
 
 def build_gb_recomp(game: dict, dest: Path,
@@ -899,8 +890,14 @@ def build_gb_recomp(game: dict, dest: Path,
             raise
 
     # ── Step 3: Recompile via GB Recompiled ───────────────────────────────────
-    step3_marker = work_dir / "_step_3_recompiled"
-    recomp_out   = work_dir / "recomp_out"
+    # recomp_out lives at gbrecomp_src/output/<rom_stem> so that when
+    # gb-recompiled runs with cwd=gbrecomp_src and a RELATIVE output path,
+    # fs::relative() returns "output/<rom_stem>" (depth=2) and the generated
+    # GBRT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../runtime" resolves correctly.
+    step3_marker     = work_dir / "_step_3_recompiled"
+    _gbrecomp_src    = work_dir / "gbrecomp_src"    # may not exist yet
+    _rom_stem        = Path(rom_name).stem           # e.g. "pokered"
+    recomp_out       = _gbrecomp_src / "output" / _rom_stem
     if step3_marker.exists() and recomp_out.exists():
         _sc(3, "skip")
     else:
@@ -910,23 +907,23 @@ def build_gb_recomp(game: dict, dest: Path,
         try:
             if not rom_dest.exists():
                 raise RuntimeError(f"ROM not found: {rom_name} — re-run Step 2.")
-            # Download binary + clone source (for runtime files)
-            recomp_bin   = _gb_get_recompiler(work_dir)
+            # Clone source + build the recompiler from that source so paths match
             gbrecomp_src = _gb_get_source(work_dir)
-            _cb(62)
+            _cb(60)
+            recomp_bin   = _gb_get_recompiler(gbrecomp_src)
+            recomp_out   = gbrecomp_src / "output" / _rom_stem
+            _cb(65)
             if recomp_out.exists():
                 shutil.rmtree(recomp_out)
-            recomp_out.mkdir()
-            # Try positional arg first, then --output flag
-            for cmd in [
-                [str(recomp_bin), str(rom_dest), str(recomp_out)],
-                [str(recomp_bin), str(rom_dest), "--output", str(recomp_out)],
-            ]:
-                result = subprocess.run(
-                    cmd, env=env, capture_output=True, text=True,
-                )
-                if result.returncode == 0:
-                    break
+            recomp_out.mkdir(parents=True)
+            # Use a RELATIVE output path so gb-recompiled's fs::relative() depth
+            # calculation generates the correct ../../runtime chain.
+            rel_out = f"output/{_rom_stem}"
+            result = subprocess.run(
+                [str(recomp_bin), str(rom_dest.resolve()), "--output", rel_out],
+                cwd=str(gbrecomp_src), env=env,
+                capture_output=True, text=True,
+            )
             if result.returncode != 0:
                 raise RuntimeError(
                     f"gb-recompiled failed (exit {result.returncode}):\n"
@@ -937,8 +934,6 @@ def build_gb_recomp(game: dict, dest: Path,
                     "gb-recompiled produced no CMakeLists.txt.\n"
                     "Output:\n" + (result.stdout + result.stderr)[-1000:]
                 )
-            # Fix hardcoded absolute runtime paths embedded by the tool
-            _gb_patch_cmake(recomp_out, gbrecomp_src)
             step3_marker.write_text("ok")
             _sc(3, "done")
             _cb(75)
@@ -947,6 +942,12 @@ def build_gb_recomp(game: dict, dest: Path,
             raise
 
     # ── Step 4: Build native binary ───────────────────────────────────────────
+    # Resolve recomp_out in case step 3 was skipped (variable may still point
+    # to the pre-clone path computed above).
+    _gbrecomp_src_resolved = work_dir / "gbrecomp_src"
+    if _gbrecomp_src_resolved.exists():
+        recomp_out = (_gbrecomp_src_resolved / "output" / _rom_stem).resolve()
+
     step4_marker = work_dir / "_step_4_built"
     if step4_marker.exists() and (dest / "version.txt").exists():
         _sc(4, "skip")
@@ -986,21 +987,37 @@ def build_gb_recomp(game: dict, dest: Path,
                     f"cmake build failed:\n"
                     + (result.stdout + result.stderr)[-3000:]
                 )
-            # Move the binary to dest
+            # Move the binary to dest — look for the named executable first,
+            # then fall back to any non-library executable (skip cmake internals).
+            _SKIP_SUFFIXES = {".cmake", ".h", ".cpp", ".c", ".so", ".dylib",
+                              ".a", ".bin", ".o", ".obj"}
+            _SKIP_DIRS    = {"CMakeFiles", "_deps"}
+            def _is_cmake_internal(p: Path) -> bool:
+                return any(part in _SKIP_DIRS for part in p.parts)
+
             moved = False
-            for candidate in sorted(cmake_build.rglob("*")):
-                if (candidate.is_file()
-                        and candidate.stat().st_mode & 0o111
-                        and candidate.suffix not in
-                            {".cmake", ".h", ".cpp", ".c", ".so", ".dylib", ".a"}
-                        and not candidate.name.startswith(".")):
-                    target = dest / candidate.name
-                    if target.exists():
-                        target.unlink()
-                    shutil.copy2(candidate, dest)
-                    os.chmod(dest / candidate.name, 0o755)
-                    moved = True
-                    break
+            # Prefer an executable whose name matches the ROM stem
+            candidates_all = [
+                p for p in cmake_build.rglob("*")
+                if p.is_file()
+                and p.stat().st_mode & 0o111
+                and p.suffix not in _SKIP_SUFFIXES
+                and not p.name.startswith(".")
+                and not _is_cmake_internal(p)
+            ]
+            # Sort: exact name match first, then by path depth (shallowest first)
+            candidates_all.sort(key=lambda p: (
+                0 if p.name == _rom_stem else 1,
+                len(p.parts),
+            ))
+            if candidates_all:
+                candidate = candidates_all[0]
+                target = dest / candidate.name
+                if target.exists():
+                    target.unlink()
+                shutil.copy2(candidate, dest)
+                os.chmod(dest / candidate.name, 0o755)
+                moved = True
             if not moved:
                 raise RuntimeError("No executable found in cmake build output.")
             _cb(97)
