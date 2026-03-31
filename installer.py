@@ -594,6 +594,53 @@ def _gb_env() -> dict:
     return env
 
 
+def _gb_get_source(work_dir: Path) -> Path:
+    """
+    Clone (or update) the gb-recompiled repo into work_dir/gbrecomp_src.
+    Returns the repo root path — needed for the runtime source files that
+    the generated CMakeLists.txt references with hardcoded absolute paths.
+    """
+    src = work_dir / "gbrecomp_src"
+    env = _gb_env()
+    if src.exists():
+        subprocess.run(
+            ["git", "-C", str(src), "pull", "--depth=1"],
+            env=env, capture_output=True,
+        )
+    else:
+        subprocess.run(
+            ["git", "clone", "--depth=1",
+             "https://github.com/arcanite24/gb-recompiled.git", str(src)],
+            env=env, capture_output=True, check=True,
+        )
+    return src
+
+
+def _gb_patch_cmake(recomp_out: Path, gbrecomp_src: Path) -> None:
+    """
+    Fix hardcoded absolute runtime paths in the generated CMakeLists.txt.
+
+    gb-recompiled embeds the path where *it* was built (e.g. /runtime/src/)
+    rather than a relocatable path.  We replace any leading path segment that
+    ends in /runtime/ with our local clone so cmake can find gbrt.c.
+    """
+    import re
+    cmake_path = recomp_out / "CMakeLists.txt"
+    if not cmake_path.exists():
+        return
+    content = cmake_path.read_text()
+    # Match any absolute path whose last two segments are runtime/src (or
+    # runtime/include etc.) and rewrite to our local clone.
+    local_runtime = str(gbrecomp_src / "runtime")
+    patched = re.sub(
+        r'["\']?(?:/[^/"\'\s]+)*/runtime(["\'/])',
+        lambda m: local_runtime + m.group(1),
+        content,
+    )
+    if patched != content:
+        cmake_path.write_text(patched)
+
+
 def _gb_get_recompiler(work_dir: Path) -> Path:
     """Return path to the gb-recompiled binary, downloading from GitHub if absent."""
     bin_path = work_dir / "gb-recompiled"
@@ -848,8 +895,10 @@ def build_gb_recomp(game: dict, dest: Path,
         try:
             if not rom_dest.exists():
                 raise RuntimeError(f"ROM not found: {rom_name} — re-run Step 2.")
-            recomp_bin = _gb_get_recompiler(work_dir)
-            _cb(60)
+            # Download binary + clone source (for runtime files)
+            recomp_bin   = _gb_get_recompiler(work_dir)
+            gbrecomp_src = _gb_get_source(work_dir)
+            _cb(62)
             if recomp_out.exists():
                 shutil.rmtree(recomp_out)
             recomp_out.mkdir()
@@ -873,6 +922,8 @@ def build_gb_recomp(game: dict, dest: Path,
                     "gb-recompiled produced no CMakeLists.txt.\n"
                     "Output:\n" + (result.stdout + result.stderr)[-1000:]
                 )
+            # Fix hardcoded absolute runtime paths embedded by the tool
+            _gb_patch_cmake(recomp_out, gbrecomp_src)
             step3_marker.write_text("ok")
             _sc(3, "done")
             _cb(75)
