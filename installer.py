@@ -618,26 +618,41 @@ def _gb_get_source(work_dir: Path) -> Path:
 
 def _gb_patch_cmake(recomp_out: Path, gbrecomp_src: Path) -> None:
     """
-    Fix hardcoded absolute runtime paths in the generated CMakeLists.txt.
+    Fix hardcoded paths in the generated CMakeLists.txt.
 
-    gb-recompiled embeds the path where *it* was built (e.g. /runtime/src/)
-    rather than a relocatable path.  We replace any leading path segment that
-    ends in /runtime/ with our local clone so cmake can find gbrt.c.
+    gb-recompiled embeds its build-time absolute paths for the runtime sources.
+    We scan every token that looks like an absolute path, check whether it
+    exists on this machine, and if not search for the same filename inside our
+    local gb-recompiled clone to find the correct location.
     """
-    import re
+    import re as _re
     cmake_path = recomp_out / "CMakeLists.txt"
     if not cmake_path.exists():
         return
-    content = cmake_path.read_text()
-    # Match any absolute path whose last two segments are runtime/src (or
-    # runtime/include etc.) and rewrite to our local clone.
-    local_runtime = str((gbrecomp_src / "runtime").resolve())
-    patched = re.sub(
-        r'["\']?(?:/[^/"\'\s]+)*/runtime(["\'/])',
-        lambda m: local_runtime + m.group(1),
-        content,
-    )
-    if patched != content:
+
+    content    = cmake_path.read_text()
+    repo_root  = gbrecomp_src.resolve()
+    changed    = False
+
+    def _fix(m: "re.Match") -> str:
+        nonlocal changed
+        token = m.group(0)
+        # Strip surrounding quotes/parens that may have been swept in
+        inner = token.strip("\"'()")
+        if Path(inner).exists():
+            return token          # already valid — leave alone
+        candidates = list(repo_root.rglob(Path(inner).name))
+        if candidates:
+            changed = True
+            # Preserve any leading/trailing quote characters
+            prefix = token[: len(token) - len(token.lstrip("\"'()"))]
+            suffix = token[len(token.rstrip("\"'()")):]
+            return prefix + str(candidates[0]) + suffix
+        return token              # couldn't fix — leave alone
+
+    # Match tokens that look like absolute paths (start with /)
+    patched = _re.sub(r'["\']?/[^\s"\'()]+["\']?', _fix, content)
+    if changed:
         cmake_path.write_text(patched)
 
 
