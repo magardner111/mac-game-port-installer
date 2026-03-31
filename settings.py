@@ -28,6 +28,7 @@ _DEFAULTS: dict = {
     "waterfall_effect": False,
     "nesticle_cursor": False,
     "blood_trail": False,
+    "pokemon_variant": "red",
 }
 
 

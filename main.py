@@ -830,32 +830,41 @@ class _BgFilter(QObject):
 
 # ── GB Recompiled dialog ───────────────────────────────────────────────────────
 
-_STEP_NAMES = {
+_GB_STEP_NAMES = {
     1: "Fetch Source",
     2: "Assemble ROM",
     3: "Recompile",
     4: "Build Native",
 }
-_STEP_ICONS = {
-    "pending": "⏳",
-    "running": "🔄",
-    "done":    "✔",
-    "skip":    "✔",
-    "error":   "✖",
-}
+_GB_STEP_ICONS = {"pending": "⏳", "running": "🔄", "done": "✔",
+                  "skip": "✔", "error": "✖"}
+
+_RED_BTN_ON  = ("background:#8b0000; color:#ffffff; border:2px solid #ff4444;"
+                "border-radius:4px; padding:6px 18px; font-weight:bold;")
+_RED_BTN_OFF = ("background:#3a1010; color:#aa6666; border:2px solid #5a2020;"
+                "border-radius:4px; padding:6px 18px;")
+_BLU_BTN_ON  = ("background:#003080; color:#ffffff; border:2px solid #4488ff;"
+                "border-radius:4px; padding:6px 18px; font-weight:bold;")
+_BLU_BTN_OFF = ("background:#101a3a; color:#6677aa; border:2px solid #1a2a5a;"
+                "border-radius:4px; padding:6px 18px;")
 
 
 class GBRecompDialog(QDialog):
     status_changed = Signal(dict)
+    _running: "dict[str, subprocess.Popen]" = {}
 
     def __init__(self, parent, game: dict):
         super().__init__(parent)
-        self.game     = game
-        self._thread  = None
-        self._worker  = None
+        self.game    = game
+        self._thread = None
+        self._worker = None
+        # Load saved variant (default red)
+        self._variant = app_settings.get("pokemon_variant") or "red"
+
         self.setWindowTitle(game["name"])
-        self.setMinimumWidth(560)
+        self.setMinimumWidth(520)
         self._build_ui()
+        self._apply_variant_style()
         self._refresh_steps()
 
         self._poll_timer = QTimer(self)
@@ -864,81 +873,89 @@ class GBRecompDialog(QDialog):
         self._poll_timer.start()
         self.finished.connect(self._poll_timer.stop)
 
-    # ── UI construction ────────────────────────────────────────────────────────
+    # ── UI ─────────────────────────────────────────────────────────────────────
 
     def _build_ui(self):
         root = QVBoxLayout(self)
-        root.setSpacing(8)
+        root.setSpacing(10)
         root.setContentsMargins(20, 16, 20, 16)
 
         # Title
         title = QLabel(self.game["name"])
         f = title.font(); f.setPointSize(15); f.setBold(True); title.setFont(f)
-        title.setWordWrap(True)
         root.addWidget(title)
 
-        sub = QLabel(
-            f"pret/pokered  ›  GB Recompiled  ›  native binary  "
-            f"({'Red variant' if self.game.get('gb_variant') == 'red' else 'Blue variant'})"
-        )
-        sub.setStyleSheet("color: #a0a0c0;")
+        sub = QLabel("pret/pokered  ›  GB Recompiled  ›  native binary")
+        sub.setStyleSheet("color:#a0a0c0;")
         root.addWidget(sub)
 
-        line = QWidget(); line.setFixedHeight(1)
-        line.setStyleSheet("background: #4040b0;")
-        root.addWidget(line)
+        sep = QWidget(); sep.setFixedHeight(1)
+        sep.setStyleSheet("background:#4040b0;")
+        root.addWidget(sep)
+
+        # ── Variant toggle ────────────────────────────────────────────────────
+        var_row = QHBoxLayout()
+        var_row.setSpacing(10)
+        self._red_btn = QPushButton("🟥  RED VERSION")
+        self._blu_btn = QPushButton("🟦  BLUE VERSION")
+        self._red_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._blu_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._red_btn.clicked.connect(lambda: self._select_variant("red"))
+        self._blu_btn.clicked.connect(lambda: self._select_variant("blue"))
+        var_row.addWidget(self._red_btn)
+        var_row.addWidget(self._blu_btn)
+        var_row.addStretch()
+        root.addLayout(var_row)
+
+        sep2 = QWidget(); sep2.setFixedHeight(1)
+        sep2.setStyleSheet("background:#333360;")
+        root.addWidget(sep2)
 
         # ── Step rows ─────────────────────────────────────────────────────────
-        self._step_icons:   dict[int, QLabel]  = {}
-        self._step_labels:  dict[int, QLabel]  = {}
-        self._step_btns:    dict[int, QPushButton] = {}
+        self._step_icons:  dict[int, QLabel]       = {}
+        self._step_labels: dict[int, QLabel]       = {}
+        self._step_btns:   dict[int, QPushButton]  = {}
 
-        step_grid = QGridLayout()
-        step_grid.setSpacing(6)
-        step_grid.setColumnMinimumWidth(0, 28)
-        step_grid.setColumnStretch(1, 1)
+        grid = QGridLayout()
+        grid.setSpacing(5)
+        grid.setColumnMinimumWidth(0, 26)
+        grid.setColumnStretch(1, 1)
 
-        for step, name in _STEP_NAMES.items():
-            icon_lbl = QLabel("⏳")
-            icon_lbl.setFixedWidth(24)
-            name_lbl = QLabel(f"  {step}. {name}")
-            name_lbl.setStyleSheet("color: #cccccc;")
-            rerun_btn = QPushButton("↺")
-            rerun_btn.setFixedWidth(32)
-            rerun_btn.setToolTip(f"Re-run from step {step}")
-            rerun_btn.clicked.connect(lambda _=False, s=step: self._run_from(s))
+        for step, name in _GB_STEP_NAMES.items():
+            icon  = QLabel("⏳"); icon.setFixedWidth(22)
+            label = QLabel(f"  {step}.  {name}")
+            label.setStyleSheet("color:#cccccc;")
+            btn   = QPushButton("↺"); btn.setFixedWidth(30)
+            btn.setToolTip(f"Re-run from step {step}")
+            btn.clicked.connect(lambda _=False, s=step: self._run_from(s))
+            grid.addWidget(icon,  step - 1, 0)
+            grid.addWidget(label, step - 1, 1)
+            grid.addWidget(btn,   step - 1, 2)
+            self._step_icons[step]  = icon
+            self._step_labels[step] = label
+            self._step_btns[step]   = btn
 
-            step_grid.addWidget(icon_lbl,  step - 1, 0)
-            step_grid.addWidget(name_lbl,  step - 1, 1)
-            step_grid.addWidget(rerun_btn, step - 1, 2)
+        root.addLayout(grid)
 
-            self._step_icons[step]  = icon_lbl
-            self._step_labels[step] = name_lbl
-            self._step_btns[step]   = rerun_btn
-
-        root.addLayout(step_grid)
-        root.addSpacing(4)
-
-        # Progress bar + label
+        # Progress
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
         root.addWidget(self.progress_bar)
 
         self.progress_label = QLabel("")
-        self.progress_label.setStyleSheet("color: #a0a0c0;")
+        self.progress_label.setStyleSheet("color:#a0a0c0;")
         root.addWidget(self.progress_label)
 
-        # ── Button row ────────────────────────────────────────────────────────
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(8)
+        # ── Bottom buttons ────────────────────────────────────────────────────
+        btn_row = QHBoxLayout(); btn_row.setSpacing(8)
 
-        self.run_btn = QPushButton("▶  PLAY")
+        self.run_btn = QPushButton("▶  RUN")
         self.run_btn.setEnabled(False)
         self.run_btn.setProperty("class", "primary")
         self.run_btn.clicked.connect(self._do_run)
 
-        self.build_btn = QPushButton("⚙  BUILD ALL")
+        self.build_btn = QPushButton("⚙  BUILD && COMPILE")
         self.build_btn.setProperty("class", "primary")
         self.build_btn.clicked.connect(lambda: self._run_from(1))
 
@@ -963,28 +980,54 @@ class GBRecompDialog(QDialog):
         root.addLayout(btn_row)
         self.adjustSize()
 
-    # ── Step status display ────────────────────────────────────────────────────
+    # ── Variant selection ──────────────────────────────────────────────────────
+
+    def _select_variant(self, variant: str):
+        if variant == self._variant:
+            return
+        old_variant = self._variant
+        self._variant = variant
+        app_settings.set_value("pokemon_variant", variant)
+        self._apply_variant_style()
+        # Changing variant invalidates assembled ROM and everything after it
+        game_with_variant = {**self.game, "gb_variant": old_variant}
+        installer.gb_rerun_from(game_with_variant, from_step=2)
+        self._refresh_steps()
+        self.progress_label.setText(
+            f"Switched to {'Red' if variant == 'red' else 'Blue'} — "
+            "re-run Build & Compile to assemble the new variant."
+        )
+
+    def _apply_variant_style(self):
+        if self._variant == "red":
+            self._red_btn.setStyleSheet(_RED_BTN_ON)
+            self._blu_btn.setStyleSheet(_BLU_BTN_OFF)
+        else:
+            self._red_btn.setStyleSheet(_RED_BTN_OFF)
+            self._blu_btn.setStyleSheet(_BLU_BTN_ON)
+
+    def _game_with_variant(self) -> dict:
+        """Return a copy of game dict with the currently selected variant."""
+        return {**self.game, "gb_variant": self._variant}
+
+    # ── Step display ───────────────────────────────────────────────────────────
 
     def _refresh_steps(self):
-        statuses = installer.gb_step_status(self.game)
+        statuses = installer.gb_step_status(self._game_with_variant())
         for step, status in statuses.items():
-            self._step_icons[step].setText(_STEP_ICONS.get(status, "⏳"))
-            col = "#00e676" if status in ("done", "skip") else \
-                  "#ff5555" if status == "error" else "#cccccc"
-            self._step_labels[step].setStyleSheet(f"color: {col};")
-        iv = installer.installed_version(self.game, "macOS")
+            self._set_step_icon(step, status)
+        iv        = installer.installed_version(self.game, "macOS")
         installed = installer.game_dir(self.game, "macOS").exists()
         self.run_btn.setEnabled(iv is not None and not self._is_running())
         self.uninstall_btn.setEnabled(iv is not None)
         self.folder_btn.setEnabled(installed)
         self.status_changed.emit(self.game)
 
-    def _set_step_status(self, step: int, status: str):
-        self._step_icons[step].setText(_STEP_ICONS.get(status, "⏳"))
-        col = "#00e676" if status in ("done", "skip") else \
-              "#ff5555" if status == "error" else \
-              "#f4c542" if status == "running" else "#cccccc"
-        self._step_labels[step].setStyleSheet(f"color: {col};")
+    def _set_step_icon(self, step: int, status: str):
+        self._step_icons[step].setText(_GB_STEP_ICONS.get(status, "⏳"))
+        col = {"done": "#00e676", "skip": "#00e676",
+               "error": "#ff5555", "running": "#f4c542"}.get(status, "#cccccc")
+        self._step_labels[step].setStyleSheet(f"color:{col};")
 
     # ── Build worker ───────────────────────────────────────────────────────────
 
@@ -992,47 +1035,45 @@ class GBRecompDialog(QDialog):
         if self._thread and self._thread.isRunning():
             return
         self.build_btn.setEnabled(False)
-        for btn in self._step_btns.values():
-            btn.setEnabled(False)
+        for b in self._step_btns.values():
+            b.setEnabled(False)
         self.progress_bar.setValue(0)
-        self.progress_label.setText(f"Starting from step {from_step}…")
+        self.progress_label.setText(f"Starting step {from_step}…")
 
         self._thread = QThread(self)
-        self._worker = GBRecompWorker(self.game, from_step)
+        self._worker = GBRecompWorker(self._game_with_variant(), from_step)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         self._worker.progress.connect(self.progress_bar.setValue)
         self._worker.step.connect(self._on_step)
-        self._worker.finished.connect(self._on_build_done)
-        self._worker.error.connect(self._on_build_error)
+        self._worker.finished.connect(self._on_done)
+        self._worker.error.connect(self._on_error)
         self._worker.finished.connect(self._thread.quit)
         self._worker.error.connect(self._thread.quit)
         self._thread.start()
 
     def _on_step(self, step: int, status: str):
-        self._set_step_status(step, status)
+        self._set_step_icon(step, status)
         self.progress_label.setText(
-            f"Step {step}: {_STEP_NAMES.get(step, '')} — {status}"
+            f"Step {step}: {_GB_STEP_NAMES.get(step, '')}  —  {status}"
         )
 
-    def _on_build_done(self):
+    def _on_done(self):
         self.progress_label.setText("Build complete ✔")
         self._refresh_steps()
         self.build_btn.setEnabled(True)
-        for btn in self._step_btns.values():
-            btn.setEnabled(True)
+        for b in self._step_btns.values():
+            b.setEnabled(True)
 
-    def _on_build_error(self, msg: str):
+    def _on_error(self, msg: str):
         self.progress_label.setText("Build failed ✖")
         self._refresh_steps()
         self.build_btn.setEnabled(True)
-        for btn in self._step_btns.values():
-            btn.setEnabled(True)
+        for b in self._step_btns.values():
+            b.setEnabled(True)
         QMessageBox.critical(self, "Build Error", msg)
 
     # ── Launch / browse / uninstall ───────────────────────────────────────────
-
-    _running: "dict[str, subprocess.Popen]" = {}
 
     def _is_running(self) -> bool:
         folder = self.game["folder"]
@@ -1053,15 +1094,14 @@ class GBRecompDialog(QDialog):
 
     def _do_run(self):
         try:
-            proc = installer.launch_game(self.game, "macOS")
+            proc = installer.launch_game(self._game_with_variant(), "macOS")
             GBRecompDialog._running[self.game["folder"]] = proc
             self.run_btn.setEnabled(False)
         except Exception as exc:
             QMessageBox.critical(self, "Launch Error", str(exc))
 
     def _do_browse(self):
-        path = installer.game_dir(self.game, "macOS")
-        installer.reveal_in_finder(path)
+        installer.reveal_in_finder(installer.game_dir(self.game, "macOS"))
 
     def _do_uninstall(self):
         reply = QMessageBox.question(
@@ -1620,10 +1660,14 @@ class MainWindow(QMainWindow):
         # Close any existing game dialog before opening a new one
         if hasattr(self, "_game_dlg") and self._game_dlg:
             self._game_dlg.close()
-        if game.get("build_type") == "gb_recomp":
-            dlg = GBRecompDialog(self, game)
-        else:
-            dlg = GameDialog(self, game)
+        try:
+            if game.get("build_type") == "gb_recomp":
+                dlg = GBRecompDialog(self, game)
+            else:
+                dlg = GameDialog(self, game)
+        except Exception as exc:
+            QMessageBox.critical(self, "Error", f"Could not open dialog:\n{exc}")
+            return
         dlg.status_changed.connect(self._update_game_row)
         self._game_dlg = dlg
         dlg.show()
