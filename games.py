@@ -355,8 +355,8 @@ GAMES = [
     # ── Game Boy ────────────────────────────────────────────────────────────────
 
     {
-        "name": "🎮 Pokémon Red / Blue",
-        "game_title": "Pokémon Red / Blue",
+        "name": "Pokemon Red / Blue",
+        "game_title": "GB Recompiled",
         "console": "Game Boy",
         "folder": "PokemonRedBlue",
         "type": "Recomp",

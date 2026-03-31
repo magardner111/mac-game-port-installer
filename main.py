@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QComboBox, QPushButton,
     QTreeWidget, QTreeWidgetItem, QHeaderView, QAbstractItemView,
-    QDialog, QProgressBar, QFormLayout,
+    QDialog, QProgressBar, QFormLayout, QGridLayout,
     QMessageBox, QSizePolicy, QMenu, QCheckBox, QFileDialog,
 )
 
@@ -881,11 +881,11 @@ class GBRecompDialog(QDialog):
         root.setContentsMargins(20, 16, 20, 16)
 
         # Title
-        title = QLabel(self.game["name"])
+        title = QLabel("Pokemon Red / Blue")
         f = title.font(); f.setPointSize(15); f.setBold(True); title.setFont(f)
         root.addWidget(title)
 
-        sub = QLabel("pret/pokered  ›  GB Recompiled  ›  native binary")
+        sub = QLabel("pret/pokered  \u203a  GB Recompiled  \u203a  native binary")
         sub.setStyleSheet("color:#a0a0c0;")
         root.addWidget(sub)
 
@@ -896,8 +896,8 @@ class GBRecompDialog(QDialog):
         # ── Variant toggle ────────────────────────────────────────────────────
         var_row = QHBoxLayout()
         var_row.setSpacing(10)
-        self._red_btn = QPushButton("🟥  RED VERSION")
-        self._blu_btn = QPushButton("🟦  BLUE VERSION")
+        self._red_btn = QPushButton("RED VERSION")
+        self._blu_btn = QPushButton("BLUE VERSION")
         self._red_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._blu_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._red_btn.clicked.connect(lambda: self._select_variant("red"))
