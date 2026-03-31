@@ -286,9 +286,29 @@ def _find_makefile_dir(dest: Path) -> Path:
     return dest  # fallback
 
 
+def _homebrew_bin() -> str:
+    """Return the Homebrew bin directory for this machine (arm64 or x86_64)."""
+    # Ask brew itself first; fall back to the conventional locations.
+    brew = shutil.which("brew")
+    if brew:
+        try:
+            result = subprocess.run(
+                [brew, "--prefix"], capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                return str(Path(result.stdout.strip()) / "bin")
+        except Exception:
+            pass
+    # Conventional defaults: Apple Silicon = /opt/homebrew, Intel = /usr/local
+    for candidate in ("/opt/homebrew/bin", "/usr/local/bin"):
+        if Path(candidate).is_dir():
+            return candidate
+    return "/opt/homebrew/bin"  # last-resort guess
+
+
 def _find_homebrew_gcc(build_env: dict) -> tuple[str | None, str | None]:
     """Return (gcc_path, g++_path) for the highest-versioned Homebrew GCC, or (None, None)."""
-    hb_bin = Path("/opt/homebrew/bin")
+    hb_bin = Path(_homebrew_bin())
     gccs = sorted(hb_bin.glob("gcc-[0-9]*"), reverse=True)
     for gcc in gccs:
         if gcc.stat().st_mode & 0o111:
@@ -457,7 +477,7 @@ def _build_game(game: dict, dest: Path, progress_cb=None) -> None:
 
     # Build a PATH that includes Homebrew regardless of how the app was launched
     # (.app bundles don't always inherit the user's shell PATH).
-    homebrew_bin = "/opt/homebrew/bin"
+    homebrew_bin = _homebrew_bin()
     base_path    = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
     build_env    = os.environ.copy()
     if homebrew_bin not in base_path:
@@ -586,7 +606,7 @@ def _cleanup_build_artifacts(game: dict, dest: Path) -> None:
 
 def _gb_env() -> dict:
     """Build environment with Homebrew in PATH."""
-    homebrew_bin = "/opt/homebrew/bin"
+    homebrew_bin = _homebrew_bin()
     base = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
     env = os.environ.copy()
     if homebrew_bin not in base:
