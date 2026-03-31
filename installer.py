@@ -938,6 +938,11 @@ def build_gb_recomp(game: dict, dest: Path,
                     raise RuntimeError(
                         f"Source for {v['stem']} not found — re-run Step 1."
                     )
+                # Apply any Makefile text patches declared in the variant
+                for patch in v.get("makefile_patches", []):
+                    mf = src_dir / patch.get("file", "Makefile")
+                    if mf.exists():
+                        mf.write_text(mf.read_text().replace(patch["old"], patch["new"]))
                 target_arg = v["make_target"]
                 cmd = ["make"] + ([target_arg] if target_arg else []) + [f"-j{cpu}"]
                 result = subprocess.run(

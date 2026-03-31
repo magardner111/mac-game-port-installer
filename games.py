@@ -396,7 +396,9 @@ GAMES = [
         "source_repo": "metroidret/M2RoS",
         "gb_variants": [
             {"key": "us", "stem": "M2RoS", "make_target": "", "label": "US VERSION",
-             "source_repo": "metroidret/M2RoS", "rom_ext": "gb", "rom_src_path": "out/M2RoS.gb"},
+             "source_repo": "metroidret/M2RoS", "rom_ext": "gb", "rom_src_path": "out/M2RoS.gb",
+             # rgbasm -L (disable LD→LDH optimisation) was removed in RGBDS v0.8.0
+             "makefile_patches": [{"file": "Makefile", "old": " -L", "new": ""}]},
         ],
     },
     {
