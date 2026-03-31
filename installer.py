@@ -698,17 +698,30 @@ def _gb_get_recompiler(gbrecomp_src: Path) -> Path:
     the cloned runtime source, so we always build from the source we cloned.
     The built binary lands at gbrecomp_src/_build/bin/gbrecomp.
     """
+    import platform as _platform
     env     = _gb_env()
     build   = gbrecomp_src / "_build"
     bin_out = build / "bin" / "gbrecomp"
+    # Invalidate cached binary if it's for the wrong architecture
+    if bin_out.exists():
+        try:
+            import subprocess as _sp
+            r = _sp.run(["file", str(bin_out)], capture_output=True, text=True)
+            host_arch = _platform.machine().lower()   # "arm64" or "x86_64"
+            if host_arch not in r.stdout.lower():
+                shutil.rmtree(build, ignore_errors=True)
+                build.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
     if bin_out.exists():
         return bin_out
 
     build.mkdir(parents=True, exist_ok=True)
+    hb_prefix = str(Path(_homebrew_bin()).parent)
     # cmake configure
     result = subprocess.run(
         ["cmake", str(gbrecomp_src), "-DCMAKE_BUILD_TYPE=Release",
-         "-DBUILD_TESTS=OFF"],
+         "-DBUILD_TESTS=OFF", f"-DCMAKE_PREFIX_PATH={hb_prefix}"],
         cwd=str(build), env=env, capture_output=True, text=True,
     )
     if result.returncode != 0:
@@ -883,8 +896,10 @@ def build_gb_recomp(game: dict, dest: Path,
                         "Install it with:  brew install rgbds"
                     )
             _cb(30)
+            # pret/pokered: default target → pokered.gbc; "blue" target → pokeblue.gbc
+            make_target = [] if variant == "red" else ["blue"]
             result = subprocess.run(
-                ["make", f"-j{os.cpu_count() or 1}"],
+                ["make"] + make_target + [f"-j{os.cpu_count() or 1}"],
                 cwd=str(src_dir), env=env, capture_output=True, text=True,
             )
             if result.returncode != 0:
@@ -988,8 +1003,11 @@ def build_gb_recomp(game: dict, dest: Path,
                 shutil.rmtree(cmake_build)
             cmake_build.mkdir()
             _cb(84)
+            # Pass Homebrew prefix so find_package(SDL2) finds the right arch.
+            hb_prefix = str(Path(_homebrew_bin()).parent)
             result = subprocess.run(
-                ["cmake", str(recomp_out), "-DCMAKE_BUILD_TYPE=Release"],
+                ["cmake", str(recomp_out), "-DCMAKE_BUILD_TYPE=Release",
+                 f"-DCMAKE_PREFIX_PATH={hb_prefix}"],
                 cwd=str(cmake_build), env=env, capture_output=True, text=True,
             )
             if result.returncode != 0:
