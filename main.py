@@ -86,6 +86,8 @@ class AllReleasesWorker(QObject):
         disk_cache = installer._load_cache()
         cache_updates = {}
         for game in GAMES:
+            if game.get("build_type") == "gb_recomp":
+                continue
             try:
                 release = installer.get_scraper(game).fetch_latest_release(game)
             except Exception:
@@ -98,6 +100,34 @@ class AllReleasesWorker(QObject):
         if cache_updates:
             installer._save_cache(cache_updates)
         self.finished.emit()
+
+
+class GBRecompWorker(QObject):
+    """Runs installer.build_gb_recomp() in a background thread."""
+    progress = Signal(int)
+    step     = Signal(int, str)   # step_num, status
+    finished = Signal()
+    error    = Signal(str)
+
+    def __init__(self, game, from_step: int = 1):
+        super().__init__()
+        self.game      = game
+        self.from_step = from_step
+
+    def run(self):
+        try:
+            dest = installer.game_dir(self.game, "macOS")
+            dest.mkdir(parents=True, exist_ok=True)
+            if self.from_step > 1:
+                installer.gb_rerun_from(self.game, self.from_step)
+            installer.build_gb_recomp(
+                self.game, dest,
+                progress_cb=self.progress.emit,
+                step_cb=self.step.emit,
+            )
+            self.finished.emit()
+        except Exception as exc:
+            self.error.emit(str(exc))
 
 
 # ── Archive / ROM helpers ──────────────────────────────────────────────────────
@@ -798,6 +828,254 @@ class _BgFilter(QObject):
         return False  # let Qt paint items on top
 
 
+# ── GB Recompiled dialog ───────────────────────────────────────────────────────
+
+_STEP_NAMES = {
+    1: "Fetch Source",
+    2: "Assemble ROM",
+    3: "Recompile",
+    4: "Build Native",
+}
+_STEP_ICONS = {
+    "pending": "⏳",
+    "running": "🔄",
+    "done":    "✔",
+    "skip":    "✔",
+    "error":   "✖",
+}
+
+
+class GBRecompDialog(QDialog):
+    status_changed = Signal(dict)
+
+    def __init__(self, parent, game: dict):
+        super().__init__(parent)
+        self.game     = game
+        self._thread  = None
+        self._worker  = None
+        self.setWindowTitle(game["name"])
+        self.setMinimumWidth(560)
+        self._build_ui()
+        self._refresh_steps()
+
+        self._poll_timer = QTimer(self)
+        self._poll_timer.setInterval(500)
+        self._poll_timer.timeout.connect(self._poll_running)
+        self._poll_timer.start()
+        self.finished.connect(self._poll_timer.stop)
+
+    # ── UI construction ────────────────────────────────────────────────────────
+
+    def _build_ui(self):
+        root = QVBoxLayout(self)
+        root.setSpacing(8)
+        root.setContentsMargins(20, 16, 20, 16)
+
+        # Title
+        title = QLabel(self.game["name"])
+        f = title.font(); f.setPointSize(15); f.setBold(True); title.setFont(f)
+        title.setWordWrap(True)
+        root.addWidget(title)
+
+        sub = QLabel(
+            f"pret/pokered  ›  GB Recompiled  ›  native binary  "
+            f"({'Red variant' if self.game.get('gb_variant') == 'red' else 'Blue variant'})"
+        )
+        sub.setStyleSheet("color: #a0a0c0;")
+        root.addWidget(sub)
+
+        line = QWidget(); line.setFixedHeight(1)
+        line.setStyleSheet("background: #4040b0;")
+        root.addWidget(line)
+
+        # ── Step rows ─────────────────────────────────────────────────────────
+        self._step_icons:   dict[int, QLabel]  = {}
+        self._step_labels:  dict[int, QLabel]  = {}
+        self._step_btns:    dict[int, QPushButton] = {}
+
+        step_grid = QGridLayout()
+        step_grid.setSpacing(6)
+        step_grid.setColumnMinimumWidth(0, 28)
+        step_grid.setColumnStretch(1, 1)
+
+        for step, name in _STEP_NAMES.items():
+            icon_lbl = QLabel("⏳")
+            icon_lbl.setFixedWidth(24)
+            name_lbl = QLabel(f"  {step}. {name}")
+            name_lbl.setStyleSheet("color: #cccccc;")
+            rerun_btn = QPushButton("↺")
+            rerun_btn.setFixedWidth(32)
+            rerun_btn.setToolTip(f"Re-run from step {step}")
+            rerun_btn.clicked.connect(lambda _=False, s=step: self._run_from(s))
+
+            step_grid.addWidget(icon_lbl,  step - 1, 0)
+            step_grid.addWidget(name_lbl,  step - 1, 1)
+            step_grid.addWidget(rerun_btn, step - 1, 2)
+
+            self._step_icons[step]  = icon_lbl
+            self._step_labels[step] = name_lbl
+            self._step_btns[step]   = rerun_btn
+
+        root.addLayout(step_grid)
+        root.addSpacing(4)
+
+        # Progress bar + label
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        root.addWidget(self.progress_bar)
+
+        self.progress_label = QLabel("")
+        self.progress_label.setStyleSheet("color: #a0a0c0;")
+        root.addWidget(self.progress_label)
+
+        # ── Button row ────────────────────────────────────────────────────────
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+
+        self.run_btn = QPushButton("▶  PLAY")
+        self.run_btn.setEnabled(False)
+        self.run_btn.setProperty("class", "primary")
+        self.run_btn.clicked.connect(self._do_run)
+
+        self.build_btn = QPushButton("⚙  BUILD ALL")
+        self.build_btn.setProperty("class", "primary")
+        self.build_btn.clicked.connect(lambda: self._run_from(1))
+
+        self.folder_btn = QPushButton("BROWSE FOLDER")
+        self.folder_btn.setEnabled(False)
+        self.folder_btn.clicked.connect(self._do_browse)
+
+        self.uninstall_btn = QPushButton("UNINSTALL")
+        self.uninstall_btn.setEnabled(False)
+        self.uninstall_btn.setProperty("class", "danger")
+        self.uninstall_btn.clicked.connect(self._do_uninstall)
+
+        close_btn = QPushButton("CLOSE")
+        close_btn.clicked.connect(self.accept)
+
+        btn_row.addWidget(self.run_btn)
+        btn_row.addWidget(self.build_btn)
+        btn_row.addWidget(self.folder_btn)
+        btn_row.addWidget(self.uninstall_btn)
+        btn_row.addStretch()
+        btn_row.addWidget(close_btn)
+        root.addLayout(btn_row)
+        self.adjustSize()
+
+    # ── Step status display ────────────────────────────────────────────────────
+
+    def _refresh_steps(self):
+        statuses = installer.gb_step_status(self.game)
+        for step, status in statuses.items():
+            self._step_icons[step].setText(_STEP_ICONS.get(status, "⏳"))
+            col = "#00e676" if status in ("done", "skip") else \
+                  "#ff5555" if status == "error" else "#cccccc"
+            self._step_labels[step].setStyleSheet(f"color: {col};")
+        iv = installer.installed_version(self.game, "macOS")
+        installed = installer.game_dir(self.game, "macOS").exists()
+        self.run_btn.setEnabled(iv is not None and not self._is_running())
+        self.uninstall_btn.setEnabled(iv is not None)
+        self.folder_btn.setEnabled(installed)
+        self.status_changed.emit(self.game)
+
+    def _set_step_status(self, step: int, status: str):
+        self._step_icons[step].setText(_STEP_ICONS.get(status, "⏳"))
+        col = "#00e676" if status in ("done", "skip") else \
+              "#ff5555" if status == "error" else \
+              "#f4c542" if status == "running" else "#cccccc"
+        self._step_labels[step].setStyleSheet(f"color: {col};")
+
+    # ── Build worker ───────────────────────────────────────────────────────────
+
+    def _run_from(self, from_step: int):
+        if self._thread and self._thread.isRunning():
+            return
+        self.build_btn.setEnabled(False)
+        for btn in self._step_btns.values():
+            btn.setEnabled(False)
+        self.progress_bar.setValue(0)
+        self.progress_label.setText(f"Starting from step {from_step}…")
+
+        self._thread = QThread(self)
+        self._worker = GBRecompWorker(self.game, from_step)
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)
+        self._worker.progress.connect(self.progress_bar.setValue)
+        self._worker.step.connect(self._on_step)
+        self._worker.finished.connect(self._on_build_done)
+        self._worker.error.connect(self._on_build_error)
+        self._worker.finished.connect(self._thread.quit)
+        self._worker.error.connect(self._thread.quit)
+        self._thread.start()
+
+    def _on_step(self, step: int, status: str):
+        self._set_step_status(step, status)
+        self.progress_label.setText(
+            f"Step {step}: {_STEP_NAMES.get(step, '')} — {status}"
+        )
+
+    def _on_build_done(self):
+        self.progress_label.setText("Build complete ✔")
+        self._refresh_steps()
+        self.build_btn.setEnabled(True)
+        for btn in self._step_btns.values():
+            btn.setEnabled(True)
+
+    def _on_build_error(self, msg: str):
+        self.progress_label.setText("Build failed ✖")
+        self._refresh_steps()
+        self.build_btn.setEnabled(True)
+        for btn in self._step_btns.values():
+            btn.setEnabled(True)
+        QMessageBox.critical(self, "Build Error", msg)
+
+    # ── Launch / browse / uninstall ───────────────────────────────────────────
+
+    _running: "dict[str, subprocess.Popen]" = {}
+
+    def _is_running(self) -> bool:
+        folder = self.game["folder"]
+        proc = GBRecompDialog._running.get(folder)
+        if proc is None:
+            return False
+        if proc.poll() is not None:
+            del GBRecompDialog._running[folder]
+            return False
+        return True
+
+    def _poll_running(self):
+        if self.run_btn.isEnabled():
+            return
+        if not self._is_running():
+            iv = installer.installed_version(self.game, "macOS")
+            self.run_btn.setEnabled(iv is not None)
+
+    def _do_run(self):
+        try:
+            proc = installer.launch_game(self.game, "macOS")
+            GBRecompDialog._running[self.game["folder"]] = proc
+            self.run_btn.setEnabled(False)
+        except Exception as exc:
+            QMessageBox.critical(self, "Launch Error", str(exc))
+
+    def _do_browse(self):
+        path = installer.game_dir(self.game, "macOS")
+        installer.reveal_in_finder(path)
+
+    def _do_uninstall(self):
+        reply = QMessageBox.question(
+            self, "Uninstall",
+            f"Remove all files for {self.game['name']}?",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes:
+            installer.uninstall_game(self.game, "macOS")
+            self._refresh_steps()
+            self.progress_bar.setValue(0)
+            self.progress_label.setText("")
+
+
 # ── Main window ────────────────────────────────────────────────────────────────
 
 class MainWindow(QMainWindow):
@@ -1342,7 +1620,10 @@ class MainWindow(QMainWindow):
         # Close any existing game dialog before opening a new one
         if hasattr(self, "_game_dlg") and self._game_dlg:
             self._game_dlg.close()
-        dlg = GameDialog(self, game)
+        if game.get("build_type") == "gb_recomp":
+            dlg = GBRecompDialog(self, game)
+        else:
+            dlg = GameDialog(self, game)
         dlg.status_changed.connect(self._update_game_row)
         self._game_dlg = dlg
         dlg.show()

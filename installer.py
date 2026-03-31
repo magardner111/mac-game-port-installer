@@ -582,6 +582,375 @@ def _cleanup_build_artifacts(game: dict, dest: Path) -> None:
                 shutil.rmtree(item)
 
 
+# ── GB Recompiled pipeline ────────────────────────────────────────────────────
+
+def _gb_env() -> dict:
+    """Build environment with Homebrew in PATH."""
+    homebrew_bin = "/opt/homebrew/bin"
+    base = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
+    env = os.environ.copy()
+    if homebrew_bin not in base:
+        env["PATH"] = homebrew_bin + ":" + base
+    return env
+
+
+def _gb_get_recompiler(work_dir: Path) -> Path:
+    """Return path to the gb-recompiled binary, downloading from GitHub if absent."""
+    bin_path = work_dir / "gb-recompiled"
+    if bin_path.exists():
+        return bin_path
+
+    import platform as _platform
+    arch = _platform.machine().lower()  # "arm64" or "x86_64"
+
+    req = urllib.request.Request(
+        "https://api.github.com/repos/arcanite24/gb-recompiled/releases/latest",
+        headers={"User-Agent": "game-port-installer/1.0"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            release = json.loads(resp.read())
+    except Exception as exc:
+        raise RuntimeError(f"Could not fetch gb-recompiled release info: {exc}")
+
+    def _score(name: str) -> int:
+        n = name.lower()
+        s = 0
+        if "mac" in n or "darwin" in n:
+            s += 10
+        if arch in n:
+            s += 5
+        if "universal" in n or "arm" in n:
+            s += 3
+        return s
+
+    assets = release.get("assets", [])
+    best = max(assets, key=lambda a: _score(a["name"]), default=None)
+    if not best or _score(best["name"]) < 5:
+        raise RuntimeError(
+            "No macOS gb-recompiled binary found in the latest release.\n"
+            "Check https://github.com/arcanite24/gb-recompiled/releases"
+        )
+
+    tmp_suffix = Path(best["name"]).suffix or ".bin"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=tmp_suffix) as fh:
+        tmp_path = Path(fh.name)
+    try:
+        urllib.request.urlretrieve(best["browser_download_url"], tmp_path)
+        name_lower = best["name"].lower()
+        if name_lower.endswith(".zip"):
+            with zipfile.ZipFile(tmp_path) as zf:
+                for member in zf.namelist():
+                    if "gb-recompiled" in member.lower() and not member.endswith("/"):
+                        bin_path.write_bytes(zf.read(member))
+                        break
+        elif ".tar" in name_lower or name_lower.endswith((".gz", ".xz")):
+            with tarfile.open(tmp_path) as tf:
+                for member in tf.getmembers():
+                    if "gb-recompiled" in member.name.lower() and member.isfile():
+                        fobj = tf.extractfile(member)
+                        if fobj:
+                            bin_path.write_bytes(fobj.read())
+                        break
+        else:
+            shutil.copy2(tmp_path, bin_path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    if not bin_path.exists():
+        raise RuntimeError("Failed to extract gb-recompiled binary from download.")
+    os.chmod(bin_path, 0o755)
+    return bin_path
+
+
+def gb_step_status(game: dict, os_name: str = "macOS") -> dict[int, str]:
+    """
+    Return current status of each step: "done" | "pending".
+    Steps: 1=Fetch, 2=Assemble, 3=Recompile, 4=Build.
+    """
+    dest     = game_dir(game, os_name)
+    work_dir = dest / "_work"
+    variant  = game.get("gb_variant", "red")
+    rom_name = "pokered.gbc" if variant == "red" else "pokeblue.gbc"
+
+    statuses = {}
+    statuses[1] = (
+        "done" if (work_dir / "_step_1_fetched").exists()
+                  and (work_dir / "pokered_src").exists()
+        else "pending"
+    )
+    statuses[2] = (
+        "done" if (work_dir / "_step_2_assembled").exists()
+                  and (work_dir / rom_name).exists()
+        else "pending"
+    )
+    statuses[3] = (
+        "done" if (work_dir / "_step_3_recompiled").exists()
+                  and (work_dir / "recomp_out").exists()
+        else "pending"
+    )
+    statuses[4] = (
+        "done" if (work_dir / "_step_4_built").exists()
+                  and (dest / "version.txt").exists()
+        else "pending"
+    )
+    return statuses
+
+
+def gb_rerun_from(game: dict, from_step: int, os_name: str = "macOS") -> None:
+    """Clear step markers from `from_step` onward so the pipeline re-runs them."""
+    work_dir = game_dir(game, os_name) / "_work"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    # Also wipe outputs that belong to the cleared steps so they truly re-run
+    variant  = game.get("gb_variant", "red")
+    rom_name = "pokered.gbc" if variant == "red" else "pokeblue.gbc"
+    for step in range(from_step, 5):
+        (work_dir / f"_step_{step}_fetched"   ).unlink(missing_ok=True)
+        (work_dir / f"_step_{step}_assembled" ).unlink(missing_ok=True)
+        (work_dir / f"_step_{step}_recompiled").unlink(missing_ok=True)
+        (work_dir / f"_step_{step}_built"     ).unlink(missing_ok=True)
+    # Remove outputs so prerequisite checks don't falsely skip
+    if from_step <= 1:
+        shutil.rmtree(work_dir / "pokered_src", ignore_errors=True)
+    if from_step <= 2:
+        (work_dir / rom_name).unlink(missing_ok=True)
+    if from_step <= 3:
+        shutil.rmtree(work_dir / "recomp_out", ignore_errors=True)
+
+
+def build_gb_recomp(game: dict, dest: Path,
+                    progress_cb=None, step_cb=None) -> None:
+    """
+    4-step GB Recompiled build pipeline.
+
+    step_cb(step: int, status: str)
+        step   = 1..4
+        status = "running" | "done" | "error" | "skip"
+
+    Folder cleanup policy
+        Step 2 done → delete pokered_src/ (keep assembled ROM)
+        Step 4 done → delete recomp_out/ (keep native binary)
+    """
+
+    def _cb(pct: int):
+        if progress_cb:
+            progress_cb(pct)
+
+    def _sc(step: int, status: str):
+        if step_cb:
+            step_cb(step, status)
+
+    env      = _gb_env()
+    work_dir = dest / "_work"
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    variant  = game.get("gb_variant", "red")
+    rom_name = "pokered.gbc" if variant == "red" else "pokeblue.gbc"
+
+    # ── Step 1: Fetch source ──────────────────────────────────────────────────
+    step1_marker = work_dir / "_step_1_fetched"
+    src_dir      = work_dir / "pokered_src"
+    if step1_marker.exists() and src_dir.exists():
+        _sc(1, "skip")
+    else:
+        step1_marker.unlink(missing_ok=True)
+        _sc(1, "running")
+        _cb(5)
+        try:
+            if src_dir.exists():
+                result = subprocess.run(
+                    ["git", "-C", str(src_dir), "pull", "--depth=1"],
+                    env=env, capture_output=True, text=True,
+                )
+            else:
+                result = subprocess.run(
+                    ["git", "clone", "--depth=1",
+                     "https://github.com/pret/pokered.git", str(src_dir)],
+                    env=env, capture_output=True, text=True,
+                )
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"git failed (exit {result.returncode}):\n"
+                    + result.stderr[-2000:]
+                )
+            hash_r = subprocess.run(
+                ["git", "-C", str(src_dir), "rev-parse", "--short", "HEAD"],
+                env=env, capture_output=True, text=True,
+            )
+            commit = hash_r.stdout.strip() or "unknown"
+            step1_marker.write_text(commit)
+            _sc(1, "done")
+            _cb(20)
+        except Exception:
+            _sc(1, "error")
+            raise
+
+    # ── Step 2: Assemble ROM ──────────────────────────────────────────────────
+    step2_marker = work_dir / "_step_2_assembled"
+    rom_dest     = work_dir / rom_name
+    if step2_marker.exists() and rom_dest.exists():
+        _sc(2, "skip")
+    else:
+        step2_marker.unlink(missing_ok=True)
+        _sc(2, "running")
+        _cb(25)
+        try:
+            if not src_dir.exists():
+                raise RuntimeError("pokered source not found — re-run Step 1.")
+            # Ensure RGBDS assembler is available
+            if not shutil.which("rgbasm", path=env["PATH"]):
+                _cb(27)
+                r = subprocess.run(
+                    ["brew", "install", "rgbds"],
+                    env=env, capture_output=True, text=True,
+                )
+                if r.returncode != 0 or not shutil.which("rgbasm", path=env["PATH"]):
+                    raise RuntimeError(
+                        "RGBDS assembler not found.\n"
+                        "Install it with:  brew install rgbds"
+                    )
+            _cb(30)
+            result = subprocess.run(
+                ["make", f"-j{os.cpu_count() or 1}"],
+                cwd=str(src_dir), env=env, capture_output=True, text=True,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"make failed (exit {result.returncode}):\n"
+                    + (result.stdout + result.stderr)[-3000:]
+                )
+            rom_src = src_dir / rom_name
+            if not rom_src.exists():
+                raise RuntimeError(
+                    f"Expected ROM '{rom_name}' not produced by make.\n"
+                    + (result.stdout + result.stderr)[-1000:]
+                )
+            shutil.copy2(rom_src, rom_dest)
+            _cb(45)
+            # ── Cleanup: delete entire source tree (ROM is safely copied out) ──
+            shutil.rmtree(src_dir)
+            step2_marker.write_text(rom_name)
+            _sc(2, "done")
+            _cb(50)
+        except Exception:
+            _sc(2, "error")
+            raise
+
+    # ── Step 3: Recompile via GB Recompiled ───────────────────────────────────
+    step3_marker = work_dir / "_step_3_recompiled"
+    recomp_out   = work_dir / "recomp_out"
+    if step3_marker.exists() and recomp_out.exists():
+        _sc(3, "skip")
+    else:
+        step3_marker.unlink(missing_ok=True)
+        _sc(3, "running")
+        _cb(55)
+        try:
+            if not rom_dest.exists():
+                raise RuntimeError(f"ROM not found: {rom_name} — re-run Step 2.")
+            recomp_bin = _gb_get_recompiler(work_dir)
+            _cb(60)
+            if recomp_out.exists():
+                shutil.rmtree(recomp_out)
+            recomp_out.mkdir()
+            # Try positional arg first, then --output flag
+            for cmd in [
+                [str(recomp_bin), str(rom_dest), str(recomp_out)],
+                [str(recomp_bin), str(rom_dest), "--output", str(recomp_out)],
+            ]:
+                result = subprocess.run(
+                    cmd, env=env, capture_output=True, text=True,
+                )
+                if result.returncode == 0:
+                    break
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"gb-recompiled failed (exit {result.returncode}):\n"
+                    + (result.stdout + result.stderr)[-3000:]
+                )
+            if not (recomp_out / "CMakeLists.txt").exists():
+                raise RuntimeError(
+                    "gb-recompiled produced no CMakeLists.txt.\n"
+                    "Output:\n" + (result.stdout + result.stderr)[-1000:]
+                )
+            step3_marker.write_text("ok")
+            _sc(3, "done")
+            _cb(75)
+        except Exception:
+            _sc(3, "error")
+            raise
+
+    # ── Step 4: Build native binary ───────────────────────────────────────────
+    step4_marker = work_dir / "_step_4_built"
+    if step4_marker.exists() and (dest / "version.txt").exists():
+        _sc(4, "skip")
+    else:
+        step4_marker.unlink(missing_ok=True)
+        _sc(4, "running")
+        _cb(80)
+        try:
+            if not recomp_out.exists():
+                raise RuntimeError("Recompiled C project not found — re-run Step 3.")
+            # Ensure cmake + SDL2 available
+            subprocess.run(
+                ["brew", "install", "cmake", "sdl2"],
+                env=env, check=False, capture_output=True,
+            )
+            cmake_build = recomp_out / "_cmake_build"
+            if cmake_build.exists():
+                shutil.rmtree(cmake_build)
+            cmake_build.mkdir()
+            _cb(84)
+            result = subprocess.run(
+                ["cmake", str(recomp_out), "-DCMAKE_BUILD_TYPE=Release"],
+                cwd=str(cmake_build), env=env, capture_output=True, text=True,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"cmake configure failed:\n"
+                    + (result.stdout + result.stderr)[-3000:]
+                )
+            _cb(90)
+            result = subprocess.run(
+                ["cmake", "--build", ".", "--parallel", str(os.cpu_count() or 1)],
+                cwd=str(cmake_build), env=env, capture_output=True, text=True,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"cmake build failed:\n"
+                    + (result.stdout + result.stderr)[-3000:]
+                )
+            # Move the binary to dest
+            moved = False
+            for candidate in sorted(cmake_build.rglob("*")):
+                if (candidate.is_file()
+                        and candidate.stat().st_mode & 0o111
+                        and candidate.suffix not in
+                            {".cmake", ".h", ".cpp", ".c", ".so", ".dylib", ".a"}
+                        and not candidate.name.startswith(".")):
+                    target = dest / candidate.name
+                    if target.exists():
+                        target.unlink()
+                    shutil.copy2(candidate, dest)
+                    os.chmod(dest / candidate.name, 0o755)
+                    moved = True
+                    break
+            if not moved:
+                raise RuntimeError("No executable found in cmake build output.")
+            _cb(97)
+            # ── Cleanup: delete generated C source + cmake build dir ─────────
+            shutil.rmtree(recomp_out)
+            # Write version from pokered commit hash
+            commit = step1_marker.read_text().strip() if step1_marker.exists() else "1.0"
+            (dest / "version.txt").write_text(commit)
+            step4_marker.write_text("ok")
+            _sc(4, "done")
+            _cb(100)
+        except Exception:
+            _sc(4, "error")
+            raise
+
+
 # ── High-level install ────────────────────────────────────────────────────────
 
 def install_game(game: dict, release: dict, asset: dict, os_name: str,

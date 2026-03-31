@@ -351,4 +351,33 @@ GAMES = [
             "make_jobs": True,
         },
     },
+
+    # ── Game Boy ────────────────────────────────────────────────────────────────
+
+    {
+        "name": "🟥 Pokémon Red",
+        "game_title": "Pokémon Red",
+        "console": "Game Boy",
+        "folder": "PokemonRed",
+        "type": "Recomp",
+        "platforms": ["macOS"],
+        "icon_url": None,
+        # Custom 4-step pipeline: fetch pret/pokered → assemble (RGBDS) →
+        # recompile (GB Recompiled) → build native (cmake + SDL2)
+        "build_type": "gb_recomp",
+        "gb_variant": "red",
+        "source_repo": "pret/pokered",
+    },
+    {
+        "name": "🟦 Pokémon Blue",
+        "game_title": "Pokémon Blue",
+        "console": "Game Boy",
+        "folder": "PokemonBlue",
+        "type": "Recomp",
+        "platforms": ["macOS"],
+        "icon_url": None,
+        "build_type": "gb_recomp",
+        "gb_variant": "blue",
+        "source_repo": "pret/pokered",
+    },
 ]
