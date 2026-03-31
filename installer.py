@@ -604,6 +604,25 @@ def _cleanup_build_artifacts(game: dict, dest: Path) -> None:
 
 # ── GB Recompiled pipeline ────────────────────────────────────────────────────
 
+def _native_arch() -> str:
+    """
+    Return the native hardware architecture string for cmake
+    (e.g. "arm64" or "x86_64"), regardless of whether the running
+    Python process is translated via Rosetta.
+    """
+    try:
+        r = subprocess.run(
+            ["sysctl", "-n", "hw.optional.arm64"],
+            capture_output=True, text=True, timeout=3,
+        )
+        if r.stdout.strip() == "1":
+            return "arm64"
+    except Exception:
+        pass
+    import platform as _platform
+    return _platform.machine().lower()   # fallback
+
+
 def _gb_env() -> dict:
     """Build environment with Homebrew in PATH."""
     homebrew_bin = _homebrew_bin()
@@ -698,30 +717,29 @@ def _gb_get_recompiler(gbrecomp_src: Path) -> Path:
     the cloned runtime source, so we always build from the source we cloned.
     The built binary lands at gbrecomp_src/_build/bin/gbrecomp.
     """
-    import platform as _platform
-    env     = _gb_env()
-    build   = gbrecomp_src / "_build"
-    bin_out = build / "bin" / "gbrecomp"
+    env        = _gb_env()
+    arch       = _native_arch()            # "arm64" or "x86_64", Rosetta-safe
+    hb_prefix  = str(Path(_homebrew_bin()).parent)
+    build      = gbrecomp_src / "_build"
+    bin_out    = build / "bin" / "gbrecomp"
     # Invalidate cached binary if it's for the wrong architecture
     if bin_out.exists():
         try:
-            import subprocess as _sp
-            r = _sp.run(["file", str(bin_out)], capture_output=True, text=True)
-            host_arch = _platform.machine().lower()   # "arm64" or "x86_64"
-            if host_arch not in r.stdout.lower():
+            r = subprocess.run(["file", str(bin_out)], capture_output=True, text=True)
+            if arch not in r.stdout.lower():
                 shutil.rmtree(build, ignore_errors=True)
-                build.mkdir(parents=True, exist_ok=True)
         except Exception:
             pass
     if bin_out.exists():
         return bin_out
 
     build.mkdir(parents=True, exist_ok=True)
-    hb_prefix = str(Path(_homebrew_bin()).parent)
-    # cmake configure
+    # cmake configure — pin architecture so Rosetta can't cause a mismatch
     result = subprocess.run(
         ["cmake", str(gbrecomp_src), "-DCMAKE_BUILD_TYPE=Release",
-         "-DBUILD_TESTS=OFF", f"-DCMAKE_PREFIX_PATH={hb_prefix}"],
+         "-DBUILD_TESTS=OFF",
+         f"-DCMAKE_PREFIX_PATH={hb_prefix}",
+         f"-DCMAKE_OSX_ARCHITECTURES={arch}"],
         cwd=str(build), env=env, capture_output=True, text=True,
     )
     if result.returncode != 0:
@@ -1003,11 +1021,13 @@ def build_gb_recomp(game: dict, dest: Path,
                 shutil.rmtree(cmake_build)
             cmake_build.mkdir()
             _cb(84)
-            # Pass Homebrew prefix so find_package(SDL2) finds the right arch.
+            # Pin architecture (Rosetta-safe) and point cmake at Homebrew SDL2.
             hb_prefix = str(Path(_homebrew_bin()).parent)
+            arch      = _native_arch()
             result = subprocess.run(
                 ["cmake", str(recomp_out), "-DCMAKE_BUILD_TYPE=Release",
-                 f"-DCMAKE_PREFIX_PATH={hb_prefix}"],
+                 f"-DCMAKE_PREFIX_PATH={hb_prefix}",
+                 f"-DCMAKE_OSX_ARCHITECTURES={arch}"],
                 cwd=str(cmake_build), env=env, capture_output=True, text=True,
             )
             if result.returncode != 0:
