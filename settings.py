@@ -32,6 +32,9 @@ _DEFAULTS: dict = {
     "gb_variant_PokemonRedBlue": "red",
     "gb_variant_PokemonGSC": "gold",
     "gb_variant_LinksAwakeningDX": "us",
+    "gb_variant_SuperMarioLand": "world",
+    "gb_variant_MetroidII": "us",
+    "gb_variant_FinalFantasyAdventure": "us",
 }
 
 

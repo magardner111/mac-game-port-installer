@@ -780,6 +780,17 @@ def _gb_source_dirs(variants: list[dict]) -> dict[str, str]:
     return seen
 
 
+def _gb_rom_name(v: dict) -> str:
+    """Local filename used to store the assembled ROM in work_dir (e.g. 'pokered.gbc')."""
+    ext = v.get("rom_ext", "gbc")
+    return f"{v['stem']}.{ext}"
+
+
+def _gb_rom_src(v: dict, src_dir: "Path") -> "Path":
+    """Path to the ROM inside the source tree after `make` completes."""
+    return src_dir / v.get("rom_src_path", _gb_rom_name(v))
+
+
 def gb_step_status(game: dict, os_name: str = "macOS") -> dict[int, str]:
     """
     Return current status of each step: "done" | "pending".
@@ -791,7 +802,7 @@ def gb_step_status(game: dict, os_name: str = "macOS") -> dict[int, str]:
     gbrecomp_src = work_dir / "gbrecomp_src"
     variants     = _gb_variants(game)
 
-    all_roms    = all((work_dir / f"{v['stem']}.gbc").exists()          for v in variants)
+    all_roms    = all((work_dir / _gb_rom_name(v)).exists()              for v in variants)
     all_recomps = all((gbrecomp_src / "output" / v["stem"]).exists()    for v in variants)
     all_bins    = all((dest / v["stem"]).exists()                        for v in variants)
 
@@ -820,7 +831,7 @@ def gb_rerun_from(game: dict, from_step: int, os_name: str = "macOS") -> None:
             shutil.rmtree(work_dir / src_dir, ignore_errors=True)
     if from_step <= 2:
         for v in variants:
-            (work_dir / f"{v['stem']}.gbc").unlink(missing_ok=True)
+            (work_dir / _gb_rom_name(v)).unlink(missing_ok=True)
     if from_step <= 3:
         shutil.rmtree(work_dir / "recomp_out", ignore_errors=True)       # old location
         shutil.rmtree(work_dir / "gbrecomp_src" / "output", ignore_errors=True)
@@ -900,7 +911,7 @@ def build_gb_recomp(game: dict, dest: Path,
 
     # ── Step 2: Assemble all variant ROMs ────────────────────────────────────
     step2_marker = work_dir / "_step_2_assembled"
-    _all_roms    = all((work_dir / f"{v['stem']}.gbc").exists() for v in variants)
+    _all_roms    = all((work_dir / _gb_rom_name(v)).exists() for v in variants)
     if step2_marker.exists() and _all_roms:
         _sc(2, "skip")
     else:
@@ -938,13 +949,13 @@ def build_gb_recomp(game: dict, dest: Path,
                         f"(exit {result.returncode}):\n"
                         + (result.stdout + result.stderr)[-3000:]
                     )
-                rom_src = src_dir / f"{v['stem']}.gbc"
+                rom_src = _gb_rom_src(v, src_dir)
                 if not rom_src.exists():
                     raise RuntimeError(
-                        f"Expected ROM '{v['stem']}.gbc' not produced by make.\n"
+                        f"Expected ROM '{rom_src.name}' not produced by make.\n"
                         + (result.stdout + result.stderr)[-1000:]
                     )
-                shutil.copy2(rom_src, work_dir / f"{v['stem']}.gbc")
+                shutil.copy2(rom_src, work_dir / _gb_rom_name(v))
             _cb(45)
             # Delete all source trees now that ROMs are safely copied out
             for dir_name in src_dirs.values():
@@ -972,10 +983,10 @@ def build_gb_recomp(game: dict, dest: Path,
             recomp_bin   = _gb_get_recompiler(gbrecomp_src)
             _cb(65)
             for v in variants:
-                rom_file = work_dir / f"{v['stem']}.gbc"
+                rom_file = work_dir / _gb_rom_name(v)
                 if not rom_file.exists():
                     raise RuntimeError(
-                        f"ROM not found: {v['stem']}.gbc — re-run Step 2."
+                        f"ROM not found: {_gb_rom_name(v)} — re-run Step 2."
                     )
                 out_dir = gbrecomp_src / "output" / v["stem"]
                 if out_dir.exists():
