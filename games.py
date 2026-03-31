@@ -370,6 +370,20 @@ GAMES = [
         ],
     },
     {
+        "name": "Zelda: Link's Awakening DX",
+        "game_title": "GB Recompiled",
+        "console": "Game Boy",
+        "folder": "LinksAwakeningDX",
+        "type": "Recomp",
+        "platforms": ["macOS"],
+        "icon_url": None,
+        "build_type": "gb_recomp",
+        "source_repo": "zladx/LADX-Disassembly",
+        "gb_variants": [
+            {"key": "us", "stem": "azle", "make_target": "", "label": "US VERSION", "source_repo": "zladx/LADX-Disassembly"},
+        ],
+    },
+    {
         "name": "Pokemon Gold / Silver / Crystal",
         "game_title": "GB Recompiled",
         "console": "Game Boy",

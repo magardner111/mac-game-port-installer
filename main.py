@@ -932,19 +932,20 @@ class GBRecompDialog(QDialog):
         sep.setStyleSheet("background:#4040b0;")
         root.addWidget(sep)
 
-        # ── Variant toggle (dynamically built from game["gb_variants"]) ───────
-        var_row = QHBoxLayout()
-        var_row.setSpacing(10)
+        # ── Variant toggle (only shown when there are 2+ variants) ────────────
         self._variant_btns: dict[str, QPushButton] = {}
-        for v in self._variants:
-            btn = QPushButton(v["label"])
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            key = v["key"]
-            btn.clicked.connect(lambda _checked=False, k=key: self._select_variant(k))
-            var_row.addWidget(btn)
-            self._variant_btns[key] = btn
-        var_row.addStretch()
-        root.addLayout(var_row)
+        if len(self._variants) > 1:
+            var_row = QHBoxLayout()
+            var_row.setSpacing(10)
+            for v in self._variants:
+                btn = QPushButton(v["label"])
+                btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                key = v["key"]
+                btn.clicked.connect(lambda _checked=False, k=key: self._select_variant(k))
+                var_row.addWidget(btn)
+                self._variant_btns[key] = btn
+            var_row.addStretch()
+            root.addLayout(var_row)
 
         sep2 = QWidget(); sep2.setFixedHeight(1)
         sep2.setStyleSheet("background:#333360;")

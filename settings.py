@@ -31,6 +31,7 @@ _DEFAULTS: dict = {
     "pokemon_variant": "red",          # legacy key, kept for migration
     "gb_variant_PokemonRedBlue": "red",
     "gb_variant_PokemonGSC": "gold",
+    "gb_variant_LinksAwakeningDX": "us",
 }
 
 
