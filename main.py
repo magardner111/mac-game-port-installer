@@ -985,18 +985,11 @@ class GBRecompDialog(QDialog):
     def _select_variant(self, variant: str):
         if variant == self._variant:
             return
-        old_variant = self._variant
         self._variant = variant
         app_settings.set_value("pokemon_variant", variant)
         self._apply_variant_style()
-        # Changing variant invalidates assembled ROM and everything after it
-        game_with_variant = {**self.game, "gb_variant": old_variant}
-        installer.gb_rerun_from(game_with_variant, from_step=2)
-        self._refresh_steps()
-        self.progress_label.setText(
-            f"Switched to {'Red' if variant == 'red' else 'Blue'} — "
-            "re-run Build & Compile to assemble the new variant."
-        )
+        label = "Red Version" if variant == "red" else "Blue Version"
+        self.progress_label.setText(f"Selected {label} — press RUN to play.")
 
     def _apply_variant_style(self):
         if self._variant == "red":
@@ -1007,8 +1000,9 @@ class GBRecompDialog(QDialog):
             self._blu_btn.setStyleSheet(_BLU_BTN_ON)
 
     def _game_with_variant(self) -> dict:
-        """Return a copy of game dict with the currently selected variant."""
-        return {**self.game, "gb_variant": self._variant}
+        """Return game dict with variant and the correct launch_binary set."""
+        stem = "pokered" if self._variant == "red" else "pokeblue"
+        return {**self.game, "gb_variant": self._variant, "launch_binary": stem}
 
     # ── Step display ───────────────────────────────────────────────────────────
 
